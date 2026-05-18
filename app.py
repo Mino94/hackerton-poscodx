@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -162,6 +163,29 @@ def _save_iv(s: InterviewState) -> None:
 
 
 st.set_page_config(page_title="AutoPM", layout="wide", initial_sidebar_state="expanded")
+
+
+def _secrets_into_os_environ() -> None:
+    # Streamlit Cloud의 TOML Secrets는 os.environ에 자동 주입되지 않는 경우가 있어, llm_router 등 getenv 경로와 맞춘다.
+    try:
+        sec = st.secrets
+    except Exception:
+        return
+    for key in (
+        "OPENAI_API_KEY",
+        "OPENAI_MODEL",
+        "OPEN_SOURCE_LLM_PROVIDER",
+        "OLLAMA_HOST",
+        "OLLAMA_MODEL",
+        "AUTOPM_RATE_LIMIT_PER_MIN",
+    ):
+        if key in sec:
+            val = sec[key]
+            if val is not None and str(val).strip():
+                os.environ.setdefault(key, str(val))
+
+
+_secrets_into_os_environ()
 _ensure_session_defaults()
 
 st.title("AutoPM")

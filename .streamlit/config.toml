@@ -1,0 +1,11 @@
+# Streamlit Cloud / 컨테이너 공통 — 브라우저 접근·기본 동작 정리
+[server]
+headless = true
+enableXsrfProtection = true
+maxUploadSize = 50
+
+[browser]
+gatherUsageStats = false
+
+[theme]
+base = "light"

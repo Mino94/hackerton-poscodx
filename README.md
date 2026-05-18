@@ -116,6 +116,7 @@ npx vercel@latest
 
 ### 본 앱(Streamlit)을 인터넷에 올리려면
 
+- **[PUBLIC_URL_DEPLOY.md](./PUBLIC_URL_DEPLOY.md)** — **Streamlit Community Cloud**(권장) 또는 **Render(Docker)** 로 전체 코드 공개 URL 배포 (Vercel로는 Streamlit 전체 불가).
 - [Streamlit Community Cloud](https://streamlit.io/cloud): 저장소 연결 후 Main file **`app.py`**, Python 의존성은 루트 **`requirements.txt`** 사용.
 
 ## 환경 변수

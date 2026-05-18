@@ -1,0 +1,17 @@
+# Render.com — New Blueprint 로 저장소 연결 시 웹 서비스가 자동 생성된다.
+# OPENAI_API_KEY 는 대시보드에서 수동 입력(sync: false).
+services:
+  - type: web
+    name: autopm-streamlit
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    plan: free
+    healthCheckPath: /_stcore/health
+    envVars:
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: OPENAI_MODEL
+        value: gpt-4o-mini
+      - key: PYTHONUTF8
+        value: "1"
