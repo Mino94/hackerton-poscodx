@@ -1,0 +1,13 @@
+# AutoPM MVP dependencies — ASCII only for Windows pip(cp949) compatibility
+crewai>=0.86.0,<1.0.0
+crewai-tools>=0.25.0,<1.0.0
+streamlit>=1.40.0
+python-dotenv>=1.0.1
+pydantic>=2.10.0
+pyyaml>=6.0.2
+openai>=1.55.0
+python-pptx>=1.0.2
+pandas>=2.2.0
+matplotlib>=3.9.0
+pillow>=10.0.0
+networkx>=3.2.0

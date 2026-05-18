@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# Virtual env
+.venv/
+.venv-autopm/
+venv/
+ENV/
+
+# Secrets & local env
+.env
+.env.local
+*.pem
+
+# IDE / OS
+.idea/
+.vscode/
+.cursor/
+.DS_Store
+Thumbs.db
+
+# Project outputs (regenerable)
+outputs/
+
+# Streamlit
+.streamlit/secrets.toml

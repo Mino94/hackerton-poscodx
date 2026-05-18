@@ -1,0 +1,284 @@
+# 8 Core PM 파이프라인 → Critic → Documentation → PPT 4단(Storyline / Visualization / Presentation Graphics / Composer)
+orchestrate_task:
+  agent: pm_orchestrator_agent
+  description: >
+    다음 입력을 바탕으로 추진계획서의 목차·산출물 구조·역할 분담 개요를 1페이지 분량 Markdown으로 요약하라.
+
+    [Rule-based 인터뷰 — 추진계획서 맥락]
+    제목/주제: {proposal_title}
+    목적: {proposal_purpose}
+    배경: {background_context}
+    핵심 문제: {current_problems}
+    대상 시스템: {target_system}
+    업무·기능 범위: {business_scope}
+    개선 방향: {improvement_direction}
+    보고 대상·의사결정자: {target_audience}
+    강조 포인트: {key_emphasis}
+    PPT 톤(인터뷰): {presentation_tone}
+    메타 힌트: {proposal_meta_hints}
+    일정/예산/부서: {timeline} / {budget_range} / {related_departments}
+    기대 효과: {expected_effects}
+
+    [Rule-based 인터뷰 요약]
+    {interview_seed}
+
+    [오픈소스/mock 1차 초안 — PM이 목차 설계 시 참고]
+    {open_source_draft}
+
+    [OpenAI 고도화 초안 — 비어 있으면 무시]
+    {openai_refined_brief}
+
+    [사용자 결정·가이드]
+    {user_decision_context}
+
+    [레거시 한 줄 요약 — 호환]
+    제목: {idea_title}
+    현재 방식: {current_process}
+    문제: {pain_points}
+    부서: {departments}
+    월시간/인원: {monthly_hours} / {headcount}
+    목표: {goals} / 일정: {target_timeline} / 예산: {budget_range}
+
+    [RAG]
+    {rag_snippet}
+    {feedback_block}
+  expected_output: >
+    Markdown bullet. Executive 관점 5줄 이내 + 이후 단계에서 채울 섹션 체크리스트.
+
+requirement_task:
+  agent: requirement_interview_agent
+  description: >
+    추진계획서 주제·제목을 기반으로 목적·배경·시스템·조직 정보를 구조화하고,
+    누락된 사업/시스템 정보와 확인 질문·합리적 가정을 정리하라.
+
+    제목/주제: {proposal_title}
+    목적: {proposal_purpose} / 배경: {background_context}
+    문제: {current_problems}
+    대상 시스템: {target_system} / 범위: {business_scope}
+    개선 방향: {improvement_direction}
+    보고 대상: {target_audience} / 강조: {key_emphasis} / 톤: {presentation_tone}
+
+    [사용자 결정 요약]
+    {user_decision_context}
+    {feedback_block}
+  expected_output: >
+    Markdown 표+bullet.
+
+business_analysis_task:
+  agent: business_analyst_agent
+  description: >
+    추진계획서 배경·문제({background_context}, {current_problems})를 바탕으로
+    현재 업무/시스템 AS-IS, Pain Point, 이해관계자 영향도를 분석하라.
+    {feedback_block}
+  expected_output: >
+    Markdown. AS-IS 흐름 + 표 1개 이상.
+
+solution_design_task:
+  agent: solution_architect_agent
+  description: >
+    목표 시스템({target_system})과 개선 방향({improvement_direction})을 반영해
+    TO-BE, 개선·자동화 범위, 시스템 구성 방향을 제시하라. MVP 범위(실연동 제외)를 명시하라.
+    {feedback_block}
+  expected_output: >
+    Markdown. TO-BE 단계 bullet + In/Out 범위.
+
+development_scope_task:
+  agent: development_scope_agent
+  description: >
+    개발 범위, 포함 기능, 제외 기능, 주요 모듈, MVP 범위를 정의하라.
+    {feedback_block}
+  expected_output: >
+    Markdown 모듈/기능 표.
+
+wbs_task:
+  agent: wbs_planner_agent
+  description: >
+    희망 일정({target_timeline})에 맞춰 WBS 표를 작성하라. 컬럼: 단계|작업|기간|담당|산출물
+    Gantt 힌트: {gantt_hint}
+    {feedback_block}
+  expected_output: >
+    Markdown WBS 표만 집중(예산/KPI는 다음 Task).
+
+budget_roi_task:
+  agent: budget_roi_agent
+  description: >
+    예산 표(항목|예상 비용|설명), ROI 서술, KPI 표(지표|현재|목표)를 작성하라. 수치에 (가정) 표기.
+
+    [사용자 강조·수정 요청]
+    {budget_risk_emphasis}
+    계산 힌트: {calc_hints}
+    {feedback_block}
+  expected_output: >
+    Markdown 표 2개 이상.
+
+risk_critic_task:
+  agent: risk_critic_agent
+  description: >
+    리스크 매트릭스 표(| 리스크 | 발생 가능성 | 영향도 | 대응 방안 |)와 상위 리스크 설명을 작성하라.
+
+    [사용자 강조·수정 요청]
+    {budget_risk_emphasis}
+    {feedback_block}
+  expected_output: >
+    Markdown 리스크 표 + bullet.
+
+critic_task:
+  agent: critic_agent
+  description: >
+    아래 초안 스냅샷을 검토하고 품질을 평가하라. 다른 내용은 출력하지 말고 **아래 형식만** 출력하라.
+
+    [초안 스냅샷]
+    {draft}
+
+    출력 형식 (반드시 키 포함):
+    CRITIC_SCORE: <0-100 정수>
+    STATUS: PASS 또는 FAIL
+    FEEDBACK_TARGET: orchestration|requirement|business|solution|scope|wbs|budget|risk|none
+    IMPROVEMENT_NOTES: <한 줄 이상 구체적 피드백>
+    FINAL_RECOMMENDATION: <최종 권고 한 단락>
+
+    판정: 80점 이상이면 PASS 가능.
+  expected_output: >
+    지정된 키 형식 문자열만.
+
+documentation_task:
+  agent: documentation_agent
+  description: >
+    단일 Markdown 문서를 작성하라. 최상단 제목은 반드시 `# AutoPM 추진계획서` 이다.
+
+    [루프 메타]
+    {loop_meta}
+
+    [오케스트레이션]
+    {orchestration_brief}
+
+    [요건 인터뷰]
+    {requirement_analysis}
+
+    [비즈니스 분석]
+    {business_analysis}
+
+    [솔루션]
+    {solution_direction}
+
+    [개발 범위]
+    {development_scope}
+
+    [WBS]
+    {wbs_plan}
+
+    [예산/ROI/KPI]
+    {budget_roi}
+
+    [리스크]
+    {risk_management}
+
+    [Critic 원문]
+    {critic_review}
+
+    [사용자 수정 요청]
+    {ppt_revision_notes}
+
+    반드시 포함할 섹션:
+    ## 1. Executive Summary
+    ## 2. 추진 배경
+    ## 3. 현재 문제점
+    ## 4. AS-IS
+    ## 5. TO-BE
+    ## 6. 개발 범위
+    ## 7. WBS
+    ## 8. 예산 및 ROI
+    ## 9. KPI
+    ## 10. 리스크 매트릭스
+    ## 11. Critic Review
+
+    (## 12. PPT 슬라이드 구성 은 시스템이 자동 삽입하므로 쓰지 마라.)
+    각 섹션은 비우지 마라. 표는 Markdown 표 형식.
+  expected_output: >
+    완성된 단일 Markdown 본문만.
+
+slide_storyline_task:
+  agent: storyline_slide_planning_agent
+  description: >
+    아래 최종 Markdown을 기반으로 슬라이드 스토리라인을 JSON으로 출력하라.
+    보고 대상({target_audience}), 강조 포인트({key_emphasis}),
+    인터뷰에서 정한 PPT 톤({presentation_tone})에 맞춰 장표 소제목·메시지 밀도를 조절하라.
+    출력은 **유효한 JSON 한 덩어리**만 (코드펜스 없음). 스키마:
+    {{"project_title": str, "subtitle": str, "slides": [{{"slide_no": int, "title": str, "objective": str, "key_message": str, "layout_type": str, "visual_type": str, "content": {{}}}}]}}
+
+    [슬라이드 구성·장 수 지시 — 반드시 준수]
+    {slide_deck_instruction}
+
+    [추가 수정 노트]
+    {ppt_revision_notes}
+
+    visual_type 후보: summary_cards, problem_cards, process_flow, before_after, scope_matrix, wbs_table, gantt_like_timeline, budget_table, kpi_cards, risk_matrix, org_role_map, architecture_block_diagram, swimlane_process, comparison_table, priority_matrix, funnel_diagram, roadmap_timeline, conclusion_box
+
+    (레거시 timeline 키는 visualization 단계에서 gantt_like_timeline 로 매핑될 수 있다.)
+
+    [Markdown]
+    {final_markdown}
+
+    [프로젝트 제목]
+    {proposal_title}
+    (레거시 키: {idea_title})
+  expected_output: >
+    JSON 객체만.
+
+visualization_design_task:
+  agent: visualization_agent
+  description: >
+    아래 스토리라인 JSON에 맞춰 각 slide_no별 visual_type과 content를 보강한 JSON을 출력하라.
+    출력은 JSON만. slides 배열은 slide_no 순서로 유지.
+
+    [시각 계획 지시]
+    {visual_asset_instruction}
+    {ppt_revision_notes}
+
+    visual_type은 반드시 다음 중 하나: summary_cards, problem_cards, process_flow, before_after, scope_matrix, wbs_table, gantt_like_timeline, budget_table, kpi_cards, risk_matrix, org_role_map, architecture_block_diagram, swimlane_process, comparison_table, priority_matrix, funnel_diagram, roadmap_timeline, conclusion_box
+
+    [스토리라인 JSON]
+    {storyline_json}
+  expected_output: >
+    JSON 객체만.
+
+presentation_graphics_task:
+  agent: presentation_graphics_agent
+  description: >
+    Visualization Agent의 JSON을 입력으로 각 슬라이드에 graphics_spec을 추가하라.
+    출력은 유효한 JSON 한 덩어리만. 스키마:
+    {{"slides": [{{"slide_no": int, "graphics_spec": {{"render_mode": "ppt_shapes"|"matplotlib_png"|"hybrid", "asset_type": str, "elements": [{{"type":"rounded_box"|"arrow"|"arrow_down"|"trapezoid", "label": str}}], "notes": str}}}}]}}
+
+    [장표 스타일 지시 — Guided 선택 + 인터뷰 톤]
+    인터뷰 발표 톤: {presentation_tone} / 목적: {proposal_purpose}
+    {visual_style_instruction}
+    [시각 요소 지시]
+    {visual_asset_instruction}
+    {ppt_revision_notes}
+
+    render_mode 힌트: process_flow·roadmap은 ppt_shapes 권장, budget_table·kpi_cards는 hybrid(표+차트 시도), architecture는 elements에 rounded_box+arrow_down.
+    실제 PNG 경로는 시스템이 채운다 — 필요한 content 미리보기용 elements만 명확히 써라.
+
+    [시각화 JSON]
+    {visualization_json}
+  expected_output: >
+    JSON 객체만.
+
+ppt_composition_task:
+  agent: ppt_composer_agent
+  description: >
+    Presentation Graphics JSON과 시각화 JSON을 통합 검증·보완하여 최종 SlideDeckSpec JSON을 출력하라.
+    각 slide에 graphics_spec 필드를 가능하면 유지하라. slides는 사용자 지시 장 수에 맞추고, project_title은 반드시 채운다.
+
+    [Composer 지시]
+    {composer_user_notes}
+    {slide_deck_instruction}
+    {ppt_revision_notes}
+
+    [Presentation Graphics JSON]
+    {presentation_graphics_json}
+
+    [시각화 JSON]
+    {visualization_json}
+  expected_output: >
+    JSON 객체만.
