@@ -1,0 +1,38 @@
+# Streamlit Cloud — 데모만 (API 키 없이)
+
+저장소 코드는 이미 준비됨. **가입하셨다면 아래만 하면 됩니다.**
+
+## 1. 앱 만들기
+
+1. https://share.streamlit.io/ 로그인  
+2. **Create app**  
+3. **Repository**: `Mino94/hackerton-poscodx`  
+4. **Branch**: `main`  
+5. **Main file**: `app.py`  
+6. **App URL** (선택): 영문·숫자만, 예: `autopm-demo`
+
+## 2. Secrets (비워도 됨)
+
+데모만이면 **Secrets에 아무것도 넣지 않고** Deploy 해도 됩니다.
+
+- `OPENAI_API_KEY` 없음 → Fallback Markdown / Mock 초안 / Fallback PPT 경로로 동작합니다.
+- 나중에 OpenAI 쓰려면 Secrets에만 추가:
+
+```toml
+OPENAI_API_KEY = "sk-..."
+OPENAI_MODEL = "gpt-4o-mini"
+```
+
+(`app.py`가 Secrets를 환경 변수로 옮겨 줍니다.)
+
+## 3. 고급 설정 (권장)
+
+- **Python version**: **3.12**  
+- 첫 빌드: `requirements.txt`(crewai 등) 때문에 **몇 분** 걸릴 수 있음.
+
+## 4. 문제 시
+
+- **Deploy logs**에서 `pip install` 오류 확인  
+- 무료 플랜 **리소스 한도**로 설치 실패하면 로그에 표시됨
+
+배포가 끝나면 `https://<선택한이름>.streamlit.app` 주소로 다른 사람도 접속 가능합니다.
