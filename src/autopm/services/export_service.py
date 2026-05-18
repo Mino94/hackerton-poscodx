@@ -121,6 +121,22 @@ def export_evaluation_reports(out_dir: Path, report: dict[str, Any]) -> dict[str
     return paths
 
 
+def export_business_plan_json(out_dir: Path, business_plan: dict[str, Any]) -> str:
+    """business_plan.json — Agent·fallback 통합 구조."""
+    out_dir.mkdir(parents=True, exist_ok=True)
+    path = out_dir / "business_plan.json"
+    path.write_text(json.dumps(business_plan, ensure_ascii=False, indent=2), encoding="utf-8")
+    return str(path.resolve())
+
+
+def export_content_coverage_json(out_dir: Path, report: dict[str, Any]) -> str:
+    """슬라이드 내용 충만도 리포트."""
+    out_dir.mkdir(parents=True, exist_ok=True)
+    path = out_dir / "content_coverage_report.json"
+    path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    return str(path.resolve())
+
+
 def export_run_artifacts(state: AutoPMState, final_markdown: str) -> dict[str, str]:
     """AGENTS.md가 요구한 파일명으로 저장 — 실패해도 경로는 artifacts에 남긴다."""
     root = _project_root() / "outputs"

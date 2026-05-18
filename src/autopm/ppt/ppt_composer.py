@@ -63,6 +63,9 @@ def _write_pptx(spec: SlideDeckSpec, path: str) -> None:
         layout_engine.add_title(slide, slide_spec.title, spec.subtitle if slide_spec.slide_no == 1 else None)
         layout_engine.add_key_message(slide, slide_spec.key_message or slide_spec.objective)
         apply_graphics_or_visual(slide, slide_spec)
+        bullets = list((slide_spec.content or {}).get("bullets") or [])
+        if bullets:
+            layout_engine.add_slide_bullets(slide, bullets)
     prs.save(path)
 
 

@@ -22,6 +22,8 @@ from autopm.orchestration.state import AutoPMState
 from autopm.evaluation.harness import EvaluationHarness, StageHarnessSnapshot, run_harness_improvement_loop
 from autopm.services.export_service import (
     append_ppt_slide_section,
+    export_business_plan_json,
+    export_content_coverage_json,
     export_evaluation_reports,
     export_run_artifacts,
     export_slide_plan_json,
@@ -39,10 +41,18 @@ from autopm.tools.document_parser import sample_parse_for_demo
 from autopm.tools.rag_engine import keyword_search
 from autopm.tools.visualization_generator import markdown_gantt_placeholder
 from autopm.ppt.asset_manifest import VisualAssetsManifest
+from autopm.ppt.content_builder import build_business_plan
 from autopm.ppt.deck_json import deck_from_llm_chain
 from autopm.ppt.graphics_agent import enrich_graphics_pipeline
 from autopm.ppt.ppt_composer import build_fallback_slide_deck, create_project_plan_ppt
+from autopm.ppt.slide_builder import (
+    build_slide_deck_spec,
+    ensure_valid_deck,
+    merge_llm_deck_graphics,
+    validate_slide_deck_content,
+)
 from autopm.ppt.slide_plan_adjust import adjust_storyline_slide_count
+from autopm.ppt.slide_schema import SlideDeckSpec
 from autopm.state.decision_enrichment import apply_decisions_to_enriched
 from autopm.state.ppt_generation_state import (
     PHASE_COMPOSER,
@@ -1102,22 +1112,48 @@ class AutoPMFlow:
         )
         if enriched:
             title = (enriched.get("proposal_title") or enriched.get("idea_title") or title).strip() or "AutoPM"
-        deck = build_fallback_slide_deck(title, "Demo / 오류 복구")
+
+        inp_combined: dict[str, str] = {k: str(v) for k, v in dict(state.user_input).items() if v is not None}
+        if enriched:
+            for k, v in enriched.items():
+                if v is not None:
+                    inp_combined[k] = str(v)
+
+        # 1) 인터뷰·Markdown → business_plan 통합 (slide·PPT의 단일 소스)
+        business_plan = build_business_plan(inp_combined, {"markdown": markdown_before_slides})
+        outp = root / "outputs"
+        try:
+            outp.mkdir(parents=True, exist_ok=True)
+            state.artifacts["business_plan.json"] = export_business_plan_json(outp, business_plan)
+        except OSError as exc:
+            state.errors.append(f"business_plan.json: {exc}")
+
+        deck_dict = build_slide_deck_spec(business_plan, {"subtitle": "AutoPM — 추진계획서"})
+        llm_deck: SlideDeckSpec | None = None
         if llm_ok and agents and task_defs and enriched:
             try:
                 if not skip_chain:
                     self._run_ppt_crew_chain(state, agents, task_defs, enriched, markdown_before_slides, on_progress)
-                deck = deck_from_llm_chain(
+                llm_deck = deck_from_llm_chain(
                     state.slide_storyline_raw,
                     state.visualization_raw,
                     state.ppt_composer_raw,
                     project_title=title,
                     presentation_graphics_text=state.presentation_graphics_raw,
                 )
+                deck_dict = merge_llm_deck_graphics(deck_dict, llm_deck)
             except Exception as exc:  # noqa: BLE001
                 state.errors.append(f"ppt_crew: {exc}")
-                deck = build_fallback_slide_deck(title, "PPT Crew 실패 — fallback")
 
+        deck_dict = ensure_valid_deck(deck_dict, business_plan)
+        ok_cov, _cov_errs, cov_report = validate_slide_deck_content(deck_dict)
+        cov_report["validation_passed"] = ok_cov
+        try:
+            state.artifacts["content_coverage_report.json"] = export_content_coverage_json(outp, cov_report)
+        except OSError as exc:
+            state.errors.append(f"content_coverage_report.json: {exc}")
+
+        deck = SlideDeckSpec.model_validate(deck_dict)
         manifest: VisualAssetsManifest | None = None
         try:
             deck, manifest = enrich_graphics_pipeline(deck, root)
@@ -1125,7 +1161,6 @@ class AutoPMFlow:
             state.errors.append(f"graphics_pipeline: {exc}")
             manifest = VisualAssetsManifest(project_title=getattr(deck, "project_title", None) or title)
 
-        outp = root / "outputs"
         try:
             export_slide_plan_json(outp, deck)
             state.artifacts["slide_plan.json"] = str((outp / "slide_plan.json").resolve())

@@ -924,6 +924,8 @@ else:
 
     ppt_path = result.state.artifacts.get("project_plan.pptx")
     slide_json_path = result.state.artifacts.get("slide_plan.json")
+    business_plan_path = result.state.artifacts.get("business_plan.json")
+    content_coverage_path = result.state.artifacts.get("content_coverage_report.json")
     n_slides = _slide_count_from_json(slide_json_path)
     visual_assets_path = result.state.artifacts.get("visual_assets.json")
 
@@ -955,11 +957,13 @@ else:
                 )
         return rows_va
 
-    # 사용자 요청 순서: PPT → Slide Plan → Visual Asset → Evaluation → (기존 탭) → Raw
-    t_ppt, t_slide, t_vap, t_eval, t_doc, t_wbs, t_budget, t_risk, t_critic, t_raw = st.tabs(
+    # 사용자 요청 순서: PPT → 디버그(JSON·Coverage) → Slide Plan → Visual Asset → Evaluation → (기존 탭) → Raw
+    t_ppt, t_bp, t_slide, t_cov, t_vap, t_eval, t_doc, t_wbs, t_budget, t_risk, t_critic, t_raw = st.tabs(
         [
             "PPT Download",
+            "Business Plan JSON",
             "Slide Plan",
+            "Content Coverage",
             "Visual Asset Plan",
             "Evaluation Report",
             "추진계획서 Markdown",
@@ -985,6 +989,14 @@ else:
         else:
             st.warning("PPT 경로를 찾지 못했습니다. `outputs/project_plan.pptx` 를 확인하세요.")
 
+    with t_bp:
+        st.markdown("##### Business Plan JSON (`outputs/business_plan.json`)")
+        st.caption("Agent·fallback Markdown이 통합된 구조 — slide_plan·PPT의 단일 소스입니다.")
+        if business_plan_path and Path(business_plan_path).is_file():
+            st.code(Path(business_plan_path).read_text(encoding="utf-8"), language="json")
+        else:
+            st.info("business_plan.json 이 없습니다. Generate 실행 후 `outputs/` 를 확인하세요.")
+
     with t_slide:
         if slide_json_path and Path(slide_json_path).is_file():
             st.code(Path(slide_json_path).read_text(encoding="utf-8"), language="json")
@@ -993,6 +1005,59 @@ else:
         if parts.get(12):
             st.markdown("---")
             st.markdown(parts[12])
+
+    with t_cov:
+        st.markdown("##### Content Coverage Report (`outputs/content_coverage_report.json`)")
+        st.caption("슬라이드 수·본문 채움·표/카드형 슬라이드·WBS/예산/리스크 데이터 존재 여부를 집계합니다.")
+        if content_coverage_path and Path(content_coverage_path).is_file():
+            try:
+                cov = json.loads(Path(content_coverage_path).read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                cov = {}
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("총 슬라이드", cov.get("total_slides", "—"))
+            c2.metric("본문 채움", cov.get("slides_with_body", "—"))
+            c3.metric("빈 content", cov.get("empty_content_slides", "—"))
+            c4.metric("검증 통과", "✓" if cov.get("passed") else "✗")
+            st.markdown("**표·카드·데이터 플래그**")
+            st.dataframe(
+                [
+                    {
+                        "항목": "표 형태 슬라이드 수",
+                        "값": cov.get("table_like_slides"),
+                    },
+                    {
+                        "항목": "카드형 visual 슬라이드 수",
+                        "값": cov.get("card_like_slides"),
+                    },
+                    {
+                        "항목": "WBS 데이터",
+                        "값": cov.get("has_wbs_data"),
+                    },
+                    {
+                        "항목": "예산 데이터",
+                        "값": cov.get("has_budget_data"),
+                    },
+                    {
+                        "항목": "리스크 데이터",
+                        "값": cov.get("has_risk_data"),
+                    },
+                    {
+                        "항목": "AS-IS·TO-BE steps 충족",
+                        "값": cov.get("has_process_steps"),
+                    },
+                ],
+                hide_index=True,
+                use_container_width=True,
+            )
+            if cov.get("errors"):
+                with st.expander("검증 오류 목록"):
+                    for e in cov["errors"][:50]:
+                        st.caption(str(e))
+            with st.expander("원문 JSON"):
+                st.code(Path(content_coverage_path).read_text(encoding="utf-8"), language="json")
+        else:
+            st.info("content_coverage_report.json 이 없습니다. Generate 실행 후 확인하세요.")
 
     with t_vap:
         rows_v = _visual_asset_rows_from_file(visual_assets_path)

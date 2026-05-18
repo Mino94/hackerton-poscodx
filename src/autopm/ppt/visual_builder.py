@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pptx.slide import Slide
+from pptx.util import Inches
 
 from autopm.ppt import layout_engine
 from autopm.ppt.slide_schema import SlideSpec
@@ -17,7 +18,11 @@ def apply_visual(slide: Slide, spec: SlideSpec) -> None:
     if vt == "summary_cards":
         layout_engine.add_summary_cards(slide, list(content.get("cards", [])))
     elif vt == "problem_cards":
-        layout_engine.add_problem_cards(slide, list(content.get("problems", [])))
+        items = content.get("problem_items")
+        if isinstance(items, list) and items and isinstance(items[0], dict):
+            layout_engine.add_problem_structured_cards(slide, list(items))
+        else:
+            layout_engine.add_problem_cards(slide, list(content.get("problems", [])))
     elif vt == "process_flow":
         layout_engine.add_process_flow(slide, list(content.get("steps", [])))
     elif vt == "before_after":
@@ -37,13 +42,20 @@ def apply_visual(slide: Slide, spec: SlideSpec) -> None:
     elif vt == "gantt_like_timeline":
         layout_engine.add_process_flow(slide, list(content.get("milestones", content.get("steps", []))))
     elif vt == "budget_table":
-        layout_engine.add_budget_table(slide, list(content.get("rows", [])))
+        rows = list(content.get("rows", []))
+        if content.get("kpis"):
+            rows = rows[:5]
+        layout_engine.add_budget_table(slide, rows)
+        kpis = list(content.get("kpis") or [])
+        if kpis:
+            layout_engine.add_compact_kpis_below(slide, kpis)
     elif vt == "kpi_cards":
         layout_engine.add_kpi_cards(slide, list(content.get("kpis", [])))
     elif vt == "risk_matrix":
         layout_engine.add_risk_matrix(slide, list(content.get("risks", [])))
     elif vt == "conclusion_box":
-        layout_engine.add_conclusion_box(slide, str(content.get("text", spec.key_message)))
+        txt = str(content.get("text") or spec.key_message or "")
+        layout_engine.add_conclusion_box(slide, txt)
     elif vt == "org_role_map":
         layout_engine.add_org_role_map(slide, list(content.get("roles", [])))
     elif vt == "architecture_block_diagram":

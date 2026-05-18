@@ -70,8 +70,8 @@ def add_key_message(slide: Slide, message: str) -> None:
 
 
 def add_summary_cards(slide: Slide, cards: list[dict[str, Any]]) -> None:
-    """요약 카드 — 최대 3개 가로 배치."""
-    n = min(len(cards), 3)
+    """요약 카드 — 최대 4개 가로 배치(16:9에서 발표 가독성)."""
+    n = min(len(cards), 4)
     if n == 0:
         return
     gap = Inches(0.25)
@@ -99,6 +99,111 @@ def add_summary_cards(slide: Slide, cards: list[dict[str, Any]]) -> None:
             p2.font.size = Pt(11)
             p2.font.color.rgb = theme.BODY_RGB
             p2.space_before = Pt(8)
+
+
+def add_slide_bullets(slide: Slide, bullets: list[str], *, top: Any | None = None) -> None:
+    """슬라이드 하단 bullet — 본문 도형과 함께 요점을 넣어 빈 장을 방지한다."""
+    lines = [str(b).strip() for b in bullets if str(b).strip()][:5]
+    if not lines:
+        return
+    y_top = float(Inches(6.28)) if top is None else float(top)
+    tb = slide.shapes.add_textbox(_LEFT, int(y_top), _W, Inches(1.12))
+    tb.text_frame.word_wrap = True
+    tf = tb.text_frame
+    tf.clear()
+    for i, line in enumerate(lines):
+        p = tf.paragraphs[0] if i == 0 else tf.add_paragraph()
+        p.text = f"• {line}"[:500]
+        p.font.size = Pt(10)
+        p.font.color.rgb = theme.BODY_RGB
+        p.space_before = Pt(3) if i else Pt(0)
+
+
+def add_problem_structured_cards(slide: Slide, items: list[dict[str, Any]]) -> None:
+    """구조화된 문제 카드 — 2x2, 제목·설명·영향."""
+    items = [x for x in items if isinstance(x, dict)][:4]
+    if not items:
+        add_problem_cards(slide, ["(내용 없음)"])
+        return
+    gap_x, gap_y = Inches(0.2), Inches(0.18)
+    cols = 2
+    cell_w = (_W - gap_x) / cols
+    cell_h = Inches(1.92)
+    y0 = float(CONTENT_TOP)
+    for idx, it in enumerate(items):
+        r, c = divmod(idx, cols)
+        x = float(_LEFT) + c * (float(cell_w) + float(gap_x))
+        y = y0 + r * (float(cell_h) + float(gap_y))
+        shp = slide.shapes.add_shape(
+            MSO_AUTO_SHAPE_TYPE.ROUNDED_RECTANGLE,
+            int(x),
+            int(y),
+            int(cell_w - Inches(0.06)),
+            int(cell_h),
+        )
+        shp.fill.solid()
+        shp.fill.fore_color.rgb = theme.CARD_FILL
+        shp.line.color.rgb = theme.ACCENT
+        tit = str(it.get("title", "이슈"))[:80]
+        desc = str(it.get("description", ""))[:300]
+        imp = str(it.get("impact", ""))[:100]
+        tf = shp.text_frame
+        tf.clear()
+        p = tf.paragraphs[0]
+        p.text = tit
+        p.font.bold = True
+        p.font.size = Pt(12)
+        p.font.color.rgb = theme.TITLE_RGB
+        if desc:
+            p2 = tf.add_paragraph()
+            p2.text = desc
+            p2.font.size = Pt(9)
+            p2.font.color.rgb = theme.BODY_RGB
+            p2.space_before = Pt(4)
+        if imp:
+            p3 = tf.add_paragraph()
+            p3.text = f"영향: {imp}"
+            p3.font.size = Pt(9)
+            p3.font.italic = True
+            p3.font.color.rgb = theme.SUBTITLE_RGB
+            p3.space_before = Pt(4)
+
+
+def add_compact_kpis_below(slide: Slide, kpis: list[dict[str, Any]], *, y_start: Any | None = None) -> None:
+    """예산 표 아래에 KPI를 작은 카드로 배치."""
+    kpis = [k for k in kpis if isinstance(k, dict)][:4]
+    if not kpis:
+        return
+    y0 = float(Inches(5.05)) if y_start is None else float(y_start)
+    gap = Inches(0.12)
+    n = len(kpis)
+    card_w = (_W - gap * (n - 1)) / n
+    h = Inches(0.88)
+    for i, k in enumerate(kpis):
+        x = float(_LEFT) + i * (float(card_w) + float(gap))
+        body = f"{k.get('current','')} → {k.get('target','')}\n{k.get('effect','')}"[:200]
+        shp = slide.shapes.add_shape(
+            MSO_AUTO_SHAPE_TYPE.ROUNDED_RECTANGLE,
+            int(x),
+            int(y0),
+            int(card_w - Inches(0.04)),
+            int(h),
+        )
+        shp.fill.solid()
+        shp.fill.fore_color.rgb = RGBColor(0xEE, 0xF6, 0xEE)
+        shp.line.color.rgb = theme.ACCENT
+        tf = shp.text_frame
+        tf.clear()
+        p = tf.paragraphs[0]
+        p.text = str(k.get("name", "KPI"))[:60]
+        p.font.bold = True
+        p.font.size = Pt(10)
+        p.font.color.rgb = theme.TITLE_RGB
+        p2 = tf.add_paragraph()
+        p2.text = body
+        p2.font.size = Pt(8)
+        p2.font.color.rgb = theme.BODY_RGB
+        p2.space_before = Pt(2)
 
 
 def add_problem_cards(slide: Slide, problems: list[str]) -> None:
@@ -219,7 +324,7 @@ def add_budget_table(slide: Slide, rows: list[dict[str, Any]]) -> None:
 def add_kpi_cards(slide: Slide, kpis: list[dict[str, Any]]) -> None:
     """KPI 숫자 카드."""
     cards = []
-    for k in kpis[:3]:
+    for k in kpis[:4]:
         cards.append(
             {
                 "title": str(k.get("name", "KPI")),
