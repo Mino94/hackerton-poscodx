@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>AutoPM — Multi-Agent PM &amp; PPT</title>
+  <meta name="description" content="CrewAI 기반 추진계획서 + PPT 자동 생성 MVP. Vercel 랜딩 — 실제 앱은 Streamlit으로 실행합니다." />
+  <style>
+    :root {
+      --bg: #0f1419;
+      --card: #1a2332;
+      --text: #e8eef7;
+      --muted: #8b9cb3;
+      --accent: #5b9bd5;
+      --border: #2e3f55;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: "Segoe UI", system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+    }
+    .wrap { max-width: 720px; margin: 0 auto; padding: 2.5rem 1.25rem; }
+    h1 { font-size: 1.75rem; font-weight: 700; margin: 0 0 0.5rem; }
+    .badge {
+      display: inline-block;
+      font-size: 0.75rem;
+      padding: 0.2rem 0.55rem;
+      border-radius: 6px;
+      background: var(--card);
+      border: 1px solid var(--border);
+      color: var(--muted);
+      margin-bottom: 1.25rem;
+    }
+    p { color: var(--muted); margin: 0 0 1rem; }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 1.25rem 1.5rem;
+      margin: 1.5rem 0;
+    }
+    .card h2 { font-size: 1rem; margin: 0 0 0.75rem; color: var(--text); }
+    a.btn {
+      display: inline-block;
+      margin: 0.35rem 0.5rem 0.35rem 0;
+      padding: 0.55rem 1rem;
+      border-radius: 8px;
+      text-decoration: none;
+      font-weight: 600;
+      font-size: 0.9rem;
+    }
+    a.primary { background: var(--accent); color: #0f1419; }
+    a.secondary { background: transparent; color: var(--accent); border: 1px solid var(--accent); }
+    ul { margin: 0; padding-left: 1.2rem; color: var(--muted); }
+    code { font-size: 0.85em; background: var(--bg); padding: 0.15em 0.4em; border-radius: 4px; }
+    footer { margin-top: 2.5rem; font-size: 0.8rem; color: var(--muted); }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="badge">Vercel Static · AutoPM</div>
+    <h1>AutoPM</h1>
+    <p>
+      추진계획서 주제만 넣으면 Rule-based 인터뷰 후 <strong>Multi-Agent(CrewAI)</strong>가
+      Markdown·<strong>PPT(python-pptx)</strong>까지 만드는 해커톤 MVP입니다.
+    </p>
+    <p>
+      <strong>참고:</strong> 화면(UI)은 <strong>Streamlit</strong> 기반이라 장시간 웹소켓이 필요합니다.
+      Vercel 서버리스에는 Streamlit 전체를 그대로 올리기 어렵기 때문에, 이 페이지는 <strong>안내·랜딩</strong>용입니다.
+      실행은 아래 중 하나를 사용하세요.
+    </p>
+
+    <div class="card">
+      <h2>저장소</h2>
+      <a class="btn primary" href="https://github.com/Mino94/hackerton-poscodx" target="_blank" rel="noopener">GitHub</a>
+    </div>
+
+    <div class="card">
+      <h2>로컬 실행</h2>
+      <ul>
+        <li><code>pip install -r requirements.txt</code></li>
+        <li><code>cp .env.example .env</code> 후 <code>OPENAI_API_KEY</code> 선택 입력</li>
+        <li><code>streamlit run app.py</code></li>
+      </ul>
+    </div>
+
+    <div class="card">
+      <h2>클라우드에서 Streamlit (권장)</h2>
+      <p style="margin-bottom: 0.75rem;">
+        <a href="https://streamlit.io/cloud" target="_blank" rel="noopener">Streamlit Community Cloud</a>에
+        이 GitHub 저장소를 연결하고 Main file을 <code>app.py</code>로 지정하세요.
+        (의존성은 루트 <code>requirements.txt</code>를 사용합니다.)
+      </p>
+    </div>
+
+    <footer>
+      배포: Vercel — Root Directory를 저장소의 <code>vercel-site</code>로 지정하거나, 해당 폴더에서 <code>vercel</code> CLI로 배포하세요.
+    </footer>
+  </div>
+</body>
+</html>

@@ -99,6 +99,25 @@ $env:PYTHONUTF8 = "1"
 streamlit run app.py
 ```
 
+## Vercel 배포 (랜딩 페이지)
+
+**Streamlit 앱 전체**는 WebSocket·장시간 프로세스가 필요해 [Vercel](https://vercel.com) 서버리스에 그대로 올리는 구성은 맞지 않습니다. 대신 저장소의 **`vercel-site/`** 에 **정적 랜딩**(실행 안내·GitHub 링크)만 두었습니다.
+
+1. [Vercel](https://vercel.com)에서 **New Project** → GitHub 저장소 연결  
+2. **Root Directory**를 **`vercel-site`** 로 지정 (중요)  
+3. Framework Preset은 **Other** / 자동 인식이면 그대로 배포  
+
+CLI 예시 (`vercel-site` 폴더에서):
+
+```powershell
+cd vercel-site
+npx vercel@latest
+```
+
+### 본 앱(Streamlit)을 인터넷에 올리려면
+
+- [Streamlit Community Cloud](https://streamlit.io/cloud): 저장소 연결 후 Main file **`app.py`**, Python 의존성은 루트 **`requirements.txt`** 사용.
+
 ## 환경 변수
 
 - `OPENAI_API_KEY` — 없으면 Core/PPT Crew 대신 Fallback + PPT fallback (초안은 mock/ollama 경로로 생성 가능)

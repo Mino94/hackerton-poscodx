@@ -1,0 +1,5 @@
+{
+  "name": "autopm-vercel-landing",
+  "private": true,
+  "description": "정적 랜딩 — Vercel용. Streamlit 앱은 루트 app.py"
+}
