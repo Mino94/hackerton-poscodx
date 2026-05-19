@@ -162,7 +162,7 @@ def export_run_artifacts(state: AutoPMState, final_markdown: str) -> dict[str, s
         dlg_path.write_text(
             json.dumps(
                 {
-                    "dialogue": list(state.agent_dialogue),
+                    "dialogue": state.agent_dialogue_as_dicts(),
                     "agent_outputs_keys": sorted(state.agent_outputs.keys()),
                 },
                 ensure_ascii=False,

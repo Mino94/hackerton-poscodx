@@ -155,9 +155,6 @@ def run_deep_pipeline(
                 enriched=ctx,
                 agent_defs=agent_defs,
             )
-            state.agent_dialogue.append(thread)
-            dialogue_rounds = int(thread.get("round_count") or 0)
-            supervisor_record_dialogue(state, task_key, dialogue_rounds)
 
             if dialogue_revise_enabled() and thread.get("revision_hint"):
                 revised, rev_prov = revise_output_after_dialogue(
@@ -177,6 +174,10 @@ def run_deep_pipeline(
                     thread["revise_provider"] = rev_prov
                     if on_progress:
                         on_progress(f"{user_line} 대화 반영 산출 보완 ({rev_prov})")
+
+            state.append_agent_dialogue(thread)
+            dialogue_rounds = int(thread.get("round_count") or 0)
+            supervisor_record_dialogue(state, task_key, dialogue_rounds)
 
             if thread.get("revision_hint"):
                 feedback_acc = (

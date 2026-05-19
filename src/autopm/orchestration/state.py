@@ -4,7 +4,38 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
+
+
+class DialogueTurn(BaseModel):
+    """Agent 간 대화 1턴 — rounds[] 요소."""
+
+    model_config = ConfigDict(extra="allow")
+
+    round: int = 1
+    speaker: str = ""
+    agent_key: str = ""
+    role: str = ""
+    message: str = ""
+    provider: str = ""
+
+
+class AgentDialogueThread(BaseModel):
+    """Producer ↔ Reviewer 다회차 대화 스레드 — agent_dialogue 항목."""
+
+    model_config = ConfigDict(extra="allow")
+
+    thread_id: str = ""
+    task_key: str = ""
+    from_agent: str = ""
+    to_agent: str = ""
+    from_role: str = ""
+    to_role: str = ""
+    rounds: list[DialogueTurn] = Field(default_factory=list)
+    round_count: int = 0
+    message: str = ""
+    revision_hint: str = ""
+    revised_after_dialogue: bool = False
 
 
 class AutoPMState(BaseModel):
@@ -37,7 +68,7 @@ class AutoPMState(BaseModel):
     agent_outputs: dict[str, str] = Field(default_factory=dict)
     # Parent Agent별 Sub-Agent 실행 기록 — task_key → [{subagent_id, role, provider, output}]
     subagent_outputs: dict[str, list[dict[str, str]]] = Field(default_factory=dict)
-    agent_dialogue: list[dict[str, str]] = Field(default_factory=list)
+    agent_dialogue: list[AgentDialogueThread] = Field(default_factory=list)
 
     # Supervisor PM — 전 Agent 진행·산출·체크포인트 (supervisor_manager.py)
     supervisor: dict[str, Any] = Field(default_factory=dict)
@@ -61,6 +92,17 @@ class AutoPMState(BaseModel):
     errors: list[str] = Field(default_factory=list)
     artifacts: dict[str, str] = Field(default_factory=dict)
     timings_ms: dict[str, float] = Field(default_factory=dict)
+
+    def append_agent_dialogue(self, thread: dict[str, Any] | AgentDialogueThread) -> None:
+        """dict 또는 모델로 대화 스레드를 추가 — Pydantic 검증 오류 방지."""
+        if isinstance(thread, AgentDialogueThread):
+            self.agent_dialogue.append(thread)
+        else:
+            self.agent_dialogue.append(AgentDialogueThread.model_validate(thread))
+
+    def agent_dialogue_as_dicts(self) -> list[dict[str, Any]]:
+        """UI·JSON export용 — 항상 plain dict 리스트."""
+        return [t.model_dump() for t in self.agent_dialogue]
 
     def snapshot_for_critic(self) -> str:
         """Critic Agent에게 넘기는 요약 스냅샷 — 실패 시에도 일관된 입력을 만든다."""

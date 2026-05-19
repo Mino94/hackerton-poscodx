@@ -365,12 +365,20 @@ def format_dialogue_thread(thread: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def format_dialogue_for_prompt(dialogue_log: list[dict[str, Any]], limit: int = 8) -> str:
+def _dialogue_entry_as_dict(entry: Any) -> dict[str, Any]:
+    """Pydantic AgentDialogueThread 또는 legacy dict → dict."""
+    if hasattr(entry, "model_dump"):
+        return entry.model_dump()
+    return entry if isinstance(entry, dict) else {}
+
+
+def format_dialogue_for_prompt(dialogue_log: list[Any], limit: int = 8) -> str:
     """최근 대화 스레드를 프롬프트에 넣는다 — 다회차 rounds 지원."""
     if not dialogue_log:
         return ""
     lines: list[str] = []
-    for entry in dialogue_log[-limit:]:
+    for raw in dialogue_log[-limit:]:
+        entry = _dialogue_entry_as_dict(raw)
         if entry.get("rounds"):
             lines.append(format_dialogue_thread(entry))
             continue

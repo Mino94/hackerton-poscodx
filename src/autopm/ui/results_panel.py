@@ -223,7 +223,7 @@ def _render_agent_subtabs(result: Any, agent_steps: list[Any] | None) -> None:
                     st.code((rec.get("output") or "")[:5000], language="markdown")
 
     with t_dlg:
-        dialogue = result.state.agent_dialogue or []
+        dialogue = result.state.agent_dialogue_as_dicts()
         for i, d in enumerate(dialogue, 1):
             fr = d.get("from_role") or d.get("from_agent", "?")
             to = d.get("to_role") or d.get("to_agent", "?")
