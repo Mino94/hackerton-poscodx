@@ -20,6 +20,23 @@ class DialogueTurn(BaseModel):
     provider: str = ""
 
 
+def agent_dialogue_entries_as_dicts(state: Any) -> list[dict[str, Any]]:
+    """
+    agent_dialogue → plain dict 리스트.
+    인스턴스 메서드 없이도 UI·export에서 호출 가능(구버전 모듈 캐시·체크포인트 호환).
+    """
+    entries = getattr(state, "agent_dialogue", None) or []
+    out: list[dict[str, Any]] = []
+    for item in entries:
+        if hasattr(item, "model_dump"):
+            out.append(item.model_dump())
+        elif isinstance(item, dict):
+            out.append(item)
+        else:
+            out.append({"message": str(item)})
+    return out
+
+
 class AgentDialogueThread(BaseModel):
     """Producer ↔ Reviewer 다회차 대화 스레드 — agent_dialogue 항목."""
 
@@ -102,7 +119,7 @@ class AutoPMState(BaseModel):
 
     def agent_dialogue_as_dicts(self) -> list[dict[str, Any]]:
         """UI·JSON export용 — 항상 plain dict 리스트."""
-        return [t.model_dump() for t in self.agent_dialogue]
+        return agent_dialogue_entries_as_dicts(self)
 
     def snapshot_for_critic(self) -> str:
         """Critic Agent에게 넘기는 요약 스냅샷 — 실패 시에도 일관된 입력을 만든다."""

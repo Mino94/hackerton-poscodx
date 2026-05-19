@@ -8,7 +8,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from autopm.orchestration.state import AutoPMState
+from autopm.orchestration.state import AutoPMState, agent_dialogue_entries_as_dicts
 from autopm.ppt.asset_manifest import VisualAssetsManifest
 from autopm.ppt.slide_schema import SlideDeckSpec
 
@@ -162,7 +162,7 @@ def export_run_artifacts(state: AutoPMState, final_markdown: str) -> dict[str, s
         dlg_path.write_text(
             json.dumps(
                 {
-                    "dialogue": state.agent_dialogue_as_dicts(),
+                    "dialogue": agent_dialogue_entries_as_dicts(state),
                     "agent_outputs_keys": sorted(state.agent_outputs.keys()),
                 },
                 ensure_ascii=False,

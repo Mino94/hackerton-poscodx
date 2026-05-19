@@ -8,6 +8,7 @@ from typing import Any
 
 import streamlit as st
 
+from autopm.orchestration.state import agent_dialogue_entries_as_dicts
 from autopm.ui.markdown_utils import join_sections, outline_json, slide_count_from_json, split_numbered_sections
 from autopm.ui.supervisor_panel import render_supervisor_panel
 
@@ -223,7 +224,7 @@ def _render_agent_subtabs(result: Any, agent_steps: list[Any] | None) -> None:
                     st.code((rec.get("output") or "")[:5000], language="markdown")
 
     with t_dlg:
-        dialogue = result.state.agent_dialogue_as_dicts()
+        dialogue = agent_dialogue_entries_as_dicts(result.state)
         for i, d in enumerate(dialogue, 1):
             fr = d.get("from_role") or d.get("from_agent", "?")
             to = d.get("to_role") or d.get("to_agent", "?")
