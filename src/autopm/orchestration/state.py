@@ -33,6 +33,15 @@ class AutoPMState(BaseModel):
     presentation_graphics_raw: str = ""
     ppt_composer_raw: str = ""
 
+    # Deep Agents 파이프라인 — 태스크별 원문·Agent 간 대화 로그(UI·재실행용)
+    agent_outputs: dict[str, str] = Field(default_factory=dict)
+    # Parent Agent별 Sub-Agent 실행 기록 — task_key → [{subagent_id, role, provider, output}]
+    subagent_outputs: dict[str, list[dict[str, str]]] = Field(default_factory=dict)
+    agent_dialogue: list[dict[str, str]] = Field(default_factory=list)
+
+    # Supervisor PM — 전 Agent 진행·산출·체크포인트 (supervisor_manager.py)
+    supervisor: dict[str, Any] = Field(default_factory=dict)
+
     current_phase: str = "init"
     loop_count: int = 0
     max_loops: int = 3

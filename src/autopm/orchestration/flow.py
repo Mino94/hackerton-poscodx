@@ -1,24 +1,32 @@
-"""AutoPMFlow — CrewAI sequential Crew + Critic Self-Correction Loop + 문서화."""
+"""AutoPMFlow — Deep Agents 순차 파이프라인 + Agent 대화 + Critic Self-Correction + 문서화."""
 
 from __future__ import annotations
 
 import json
-import os
 import re
 import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from crewai import Crew, Process, Task
-
-from autopm.agents.agent_factory import build_all_agents
+from autopm.agents.agent_factory import build_all_agent_defs
+from autopm.orchestration.deep_pipeline import (
+    run_deep_critic,
+    run_deep_documentation,
+    run_deep_improvement,
+    run_deep_pipeline,
+    run_deep_single_task,
+)
 from autopm.data.cache_store import save_autopm_checkpoint
 from autopm.data.object_storage import outputs_dir
 from autopm.data.relational_store import save_project_meta
 from autopm.run_result import AutoPMRunResult
 from autopm.orchestration.quality_gate import evaluate_gate
 from autopm.orchestration.state import AutoPMState
+from autopm.orchestration.supervisor_manager import (
+    init_supervisor,
+    run_supervisor_checkpoint,
+)
 from autopm.evaluation.harness import EvaluationHarness, StageHarnessSnapshot, run_harness_improvement_loop
 from autopm.services.export_service import (
     append_ppt_slide_section,
@@ -34,8 +42,8 @@ from autopm.services.llm_router import (
     get_openai_llm_or_none,
     refine_draft_for_user_choice,
 )
-from autopm.services.observability import agent_done, log, record_phase_ms
-from autopm.services.prompt_manager import load_agents, load_tasks
+from autopm.services.observability import log, record_phase_ms
+from autopm.services.prompt_manager import load_tasks
 from autopm.tools.calculation_engine import estimate_rough_cost
 from autopm.tools.document_parser import sample_parse_for_demo
 from autopm.tools.rag_engine import keyword_search
@@ -223,13 +231,6 @@ def _merge_inputs_bundle(inputs: dict[str, str]) -> None:
     inputs["interview_seed"] = _build_interview_seed(inputs)
 
 
-def _crew_result_to_text(result: Any) -> str:
-    raw = getattr(result, "raw", None)
-    if isinstance(raw, str) and raw.strip():
-        return raw
-    return str(result)
-
-
 def _parse_critic_output(text: str) -> tuple[int | None, str, str, str, str]:
     """Critic 출력에서 점수·상태·타깃·노트를 추출 — 형식이 깨져도 데모가 멈추지 않게."""
     score: int | None = None
@@ -312,7 +313,6 @@ class AutoPMFlow:
     ) -> AutoPMRunResult:
         """Guided Mode용 단계 실행 — Streamlit이 세션에 autopm_state·ppt_gen을 넘겨 이어 붙인다."""
         pg = ppt_gen or PPTGenerationState()
-        os.environ.setdefault("CREWAI_DISABLE_TELEMETRY", "true")
         root = _project_root()
         inputs = dict(inputs)
 
@@ -365,57 +365,17 @@ class AutoPMFlow:
                 inputs.get("pain_points") or inputs.get("current_problems", ""),
             )
             enriched = self._build_enriched(inputs, pg)
-            llm = get_openai_llm_or_none()
-            if llm is None:
-                t0_fb = time.perf_counter()
-                md = self._fallback_markdown(state, reason="OPENAI_API_KEY 없음")
-                state.workspace_markdown = md
-                record_phase_ms(state, "fallback_total", time.perf_counter() - t0_fb)
-                return AutoPMRunResult(
-                    markdown=md,
-                    structured={**_struct(), "mode": "fallback_no_key", "autopm_state": state.model_dump()},
-                    state=state,
-                )
             try:
-                agent_defs = load_agents()
-                task_defs = load_tasks()
-                agents = build_all_agents(agent_defs, llm)
-                state.current_phase = "phase_pipeline"
-                self._run_pipeline(state, agents, task_defs, enriched, on_progress)
-                save_autopm_checkpoint(root, "after_pipeline", state)
-                self._harness_after_pipeline(state, inputs, pg, agents, task_defs, enriched, on_progress)
-                state.current_phase = "critic_loop"
-                while True:
-                    if on_progress:
-                        on_progress(f"[Critic] 평가 중 (loop_count={state.loop_count})")
-                    critic_text = self._run_critic_crew(state, agents, task_defs, enriched)
-                    state.critic_review = critic_text
-                    score, _status, target, notes, final_rec = _parse_critic_output(critic_text)
-                    state.critic_score = score
-                    state.critic_status = _status
-                    state.feedback_target = target
-                    state.feedback_text = notes
-                    if final_rec:
-                        state.final_recommendation = final_rec
-                    if evaluate_gate(score):
-                        state.pass_quality_gate = True
-                        break
-                    if score is None and target == "none":
-                        break
-                    if state.loop_count >= state.max_loops:
-                        break
-                    if target not in _IMPROVEMENT_MAP:
-                        break
-                    self._run_improvement(state, agents, task_defs, enriched, target, notes, on_progress)
-                    state.loop_count += 1
-                    state.improvement_applied.append(f"{target}: {notes[:200]}")
-                state.current_phase = "documentation"
-                final_md = self._run_documentation_crew(state, agents, task_defs, enriched, on_progress)
-                state.workspace_markdown = final_md
+                t0_core = time.perf_counter()
+                final_md = self._run_deep_core_document(
+                    state, inputs, enriched, pg, root, on_progress, demo_mode=False
+                )
+                record_phase_ms(state, "core_doc_phased", time.perf_counter() - t0_core)
                 save_autopm_checkpoint(root, "after_doc_phased", state)
+                mode = "deep_demo" if get_openai_llm_or_none() is None else "deep_llm"
                 return AutoPMRunResult(
                     markdown=final_md,
-                    structured={**_struct(), "autopm_state": state.model_dump()},
+                    structured={**_struct(), "mode": mode, "autopm_state": state.model_dump()},
                     state=state,
                 )
             except Exception as exc:  # noqa: BLE001
@@ -440,19 +400,9 @@ class AutoPMFlow:
             state = AutoPMState.model_validate(autopm_state_json)
             state.user_input = inputs
             enriched = self._build_enriched(inputs, pg)
-            llm = get_openai_llm_or_none()
-            if llm is None:
-                st2 = state
-                st2.errors.append("PPT phase requires OPENAI_API_KEY")
-                return AutoPMRunResult(
-                    markdown="",
-                    structured={**_struct(), "error": "no_llm_for_ppt_phase"},
-                    state=st2,
-                )
             try:
-                agent_defs = load_agents()
+                agent_defs = build_all_agent_defs()
                 task_defs = load_tasks()
-                agents = build_all_agents(agent_defs, llm)
                 final_md = (state.workspace_markdown or "").strip()
                 if not final_md:
                     return AutoPMRunResult(
@@ -472,8 +422,14 @@ class AutoPMFlow:
                 if phase in (PHASE_STORYLINE, PHASE_IMPROVE_CHAIN):
                     ctx1 = {**enriched, "final_markdown": final_md, "idea_title": title}
                     self._notify(on_progress, "[9/12] Storyline Agent: PPT 장표 흐름 설계")
-                    out1 = self._run_single_agent_task(
-                        state, agents, task_defs, ctx1, "slide_storyline_task", on_progress, "[9/12] Storyline 완료"
+                    out1 = run_deep_single_task(
+                        state,
+                        agent_defs,
+                        task_defs,
+                        ctx1,
+                        "slide_storyline_task",
+                        on_progress,
+                        "[9/12] Storyline Agent: PPT 장표 흐름 설계",
                     )
                     state.slide_storyline_raw = adjust_storyline_slide_count(out1, _slide_target_from_ppt(pg))
                     pg.last_storyline_json = state.slide_storyline_raw
@@ -494,8 +450,14 @@ class AutoPMFlow:
                         )
                     ctx2 = {**enriched, "storyline_json": state.slide_storyline_raw}
                     self._notify(on_progress, "[10/12] Visualization Agent")
-                    out2 = self._run_single_agent_task(
-                        state, agents, task_defs, ctx2, "visualization_design_task", on_progress, "[10/12] Visualization 완료"
+                    out2 = run_deep_single_task(
+                        state,
+                        agent_defs,
+                        task_defs,
+                        ctx2,
+                        "visualization_design_task",
+                        on_progress,
+                        "[10/12] Visualization Agent: 시각자료 타입 설계",
                     )
                     state.visualization_raw = out2
                     pg.last_visualization_json = out2
@@ -516,14 +478,14 @@ class AutoPMFlow:
                         )
                     ctx3 = {**enriched, "visualization_json": state.visualization_raw}
                     self._notify(on_progress, "[11/12] Presentation Graphics")
-                    out3 = self._run_single_agent_task(
+                    out3 = run_deep_single_task(
                         state,
-                        agents,
+                        agent_defs,
                         task_defs,
                         ctx3,
                         "presentation_graphics_task",
                         on_progress,
-                        "[11/12] Presentation Graphics 완료",
+                        "[11/12] Presentation Graphics: 장표·에셋 스펙 설계",
                     )
                     state.presentation_graphics_raw = out3
                     pg.last_graphics_json = out3
@@ -547,8 +509,14 @@ class AutoPMFlow:
                         "presentation_graphics_json": state.presentation_graphics_raw,
                     }
                     self._notify(on_progress, "[12/12] PPT Composer")
-                    out4 = self._run_single_agent_task(
-                        state, agents, task_defs, ctx4, "ppt_composition_task", on_progress, "[12/12] PPT Composer 완료"
+                    out4 = run_deep_single_task(
+                        state,
+                        agent_defs,
+                        task_defs,
+                        ctx4,
+                        "ppt_composition_task",
+                        on_progress,
+                        "[12/12] PPT Composer: 최종 슬라이드 스펙 확정",
                     )
                     state.ppt_composer_raw = out4
                     t0_ppt = time.perf_counter()
@@ -557,7 +525,7 @@ class AutoPMFlow:
                         final_md,
                         root,
                         llm_ok=True,
-                        agents=agents,
+                        agent_defs=agent_defs,
                         task_defs=task_defs,
                         enriched=enriched,
                         on_progress=on_progress,
@@ -596,7 +564,7 @@ class AutoPMFlow:
                     md,
                     root,
                     llm_ok=False,
-                    agents=None,
+                    agent_defs=None,
                     task_defs=None,
                     enriched=enriched,
                     on_progress=on_progress,
@@ -630,103 +598,32 @@ class AutoPMFlow:
         enriched: dict[str, str] = self._build_enriched(inputs, pg)
 
         llm = get_openai_llm_or_none()
-        if llm is None:
-            t0_fb = time.perf_counter()
-            md = self._fallback_markdown(state, reason="OPENAI_API_KEY 없음")
-            record_phase_ms(state, "fallback_total", time.perf_counter() - t0_fb)
-            # Fallback에서도 슬라이드 제목·색인은 enriched 컨텍스트와 맞추고 싶다 — PPT 단계는 llm_ok=False라 Crew는 안 탄다.
-            self._finalize_ppt_and_exports(
-                state,
-                md,
-                root,
-                llm_ok=False,
-                agents=None,
-                task_defs=None,
-                enriched=enriched,
-                on_progress=on_progress,
-                ppt_gen=pg,
-                harness_inputs=inputs,
-            )
-            save_project_meta(outputs_dir(root), {"title": inputs.get("proposal_title") or inputs.get("idea_title"), "mode": "fallback_no_key"})
-            harness_rep = state.artifacts.get("evaluation_report", {})
-            return AutoPMRunResult(
-                markdown=state.document_output,
-                structured={
-                    "mode": "fallback_no_key",
-                    "loop": state.structured_loop_summary(),
-                    "artifacts": dict(state.artifacts),
-                    "harness": harness_rep,
-                    "ppt_generation_state": pg.to_dict(),
-                },
-                state=state,
-            )
+        demo_mode = llm is None
 
         try:
-            agent_defs = load_agents()
+            agent_defs = build_all_agent_defs()
             task_defs = load_tasks()
-            agents = build_all_agents(agent_defs, llm)
+            init_supervisor(state, enriched)
 
-            state.current_phase = "phase_pipeline"
             t0_pipe = time.perf_counter()
-            self._run_pipeline(state, agents, task_defs, enriched, on_progress)
+            final_md = self._run_deep_core_document(
+                state,
+                inputs,
+                enriched,
+                pg,
+                root,
+                on_progress,
+                demo_mode=demo_mode,
+            )
             record_phase_ms(state, "pipeline_total", time.perf_counter() - t0_pipe)
-            save_autopm_checkpoint(root, "after_pipeline", state)
-            self._harness_after_pipeline(state, inputs, pg, agents, task_defs, enriched, on_progress)
 
-            state.current_phase = "critic_loop"
-            t0_crit = time.perf_counter()
-            while True:
-                if on_progress:
-                    on_progress(f"[Critic] 평가 중 (loop_count={state.loop_count})")
-                critic_text = self._run_critic_crew(state, agents, task_defs, enriched)
-                state.critic_review = critic_text
-                score, _status, target, notes, final_rec = _parse_critic_output(critic_text)
-                state.critic_score = score
-                state.critic_status = _status
-                state.feedback_target = target
-                state.feedback_text = notes
-                if final_rec:
-                    state.final_recommendation = final_rec
-
-                if evaluate_gate(score):
-                    state.pass_quality_gate = True
-                    log(state, f"quality_gate pass score={score}")
-                    break
-
-                if score is None and target == "none":
-                    log(state, "critic_parse_fail_stop")
-                    state.final_recommendation = state.final_recommendation or "Critic 파싱 실패 — 수동 검토"
-                    break
-
-                if state.loop_count >= state.max_loops:
-                    log(state, "max_loops_stop")
-                    state.final_recommendation = state.final_recommendation or "최대 Self-Correction 횟수 도달"
-                    break
-
-                if target not in _IMPROVEMENT_MAP:
-                    log(state, f"no improvement target ({target})")
-                    break
-
-                self._run_improvement(state, agents, task_defs, enriched, target, notes, on_progress)
-                state.loop_count += 1
-                state.improvement_applied.append(f"{target}: {notes[:200]}")
-
-            record_phase_ms(state, "critic_loop_total", time.perf_counter() - t0_crit)
-
-            state.current_phase = "documentation"
-            if on_progress:
-                on_progress("[Documentation] 최종 문서 조립")
-            t0_doc = time.perf_counter()
-            final_md = self._run_documentation_crew(state, agents, task_defs, enriched, on_progress)
-            record_phase_ms(state, "documentation", time.perf_counter() - t0_doc)
-            state.workspace_markdown = final_md
             t0_ppt = time.perf_counter()
             self._finalize_ppt_and_exports(
                 state,
                 final_md,
                 root,
                 llm_ok=True,
-                agents=agents,
+                agent_defs=agent_defs,
                 task_defs=task_defs,
                 enriched=enriched,
                 on_progress=on_progress,
@@ -741,10 +638,12 @@ class AutoPMFlow:
                     "loop_count": state.loop_count,
                     "critic_score": state.critic_score,
                     "pass_quality_gate": state.pass_quality_gate,
+                    "mode": "deep_demo" if demo_mode else "deep_llm",
                 },
             )
             save_autopm_checkpoint(root, "after_run", state)
             structured = {
+                "mode": "deep_demo" if demo_mode else "deep_llm",
                 "loop": state.structured_loop_summary(),
                 "artifacts": dict(state.artifacts),
                 "harness": state.artifacts.get("evaluation_report", {}),
@@ -760,7 +659,7 @@ class AutoPMFlow:
                 md,
                 root,
                 llm_ok=False,
-                agents=None,
+                agent_defs=None,
                 task_defs=None,
                 enriched=enriched,
                 on_progress=on_progress,
@@ -791,7 +690,7 @@ class AutoPMFlow:
             md,
             root,
             llm_ok=False,
-            agents=None,
+            agent_defs=None,
             task_defs=None,
             enriched=enriched_rl,
             harness_inputs=inputs,
@@ -812,22 +711,34 @@ class AutoPMFlow:
         state: AutoPMState,
         inputs: dict[str, str],
         pg: PPTGenerationState | None,
-        agents: dict[str, Any],
+        agent_defs: dict[str, Any],
         task_defs: dict[str, Any],
         enriched: dict[str, str],
         on_progress: Callable[[str], None] | None,
     ) -> None:
         """
-        코어 8단계 Crew 직후 루브릭 점검 + 미달 시 최대 3회 부분 재실행 —
+        코어 8단계 Deep Agent 직후 루브릭 점검 + 미달 시 최대 3회 부분 재실행 —
         Critic 루프와 별도로 '형식·완성도'를 먼저 끌어올린다.
         """
+
+        def _improve(
+            st: AutoPMState,
+            _agents_unused: dict[str, Any],
+            tdefs: dict[str, Any],
+            enr: dict[str, str],
+            target: str,
+            feedback: str,
+            prog: Callable[[str], None] | None,
+        ) -> None:
+            run_deep_improvement(st, agent_defs, tdefs, enr, target, feedback, _IMPROVEMENT_MAP, prog)
+
         harness = EvaluationHarness()
         pre = [
             harness.evaluate_interview(inputs),
             harness.evaluate_draft(inputs.get("open_source_draft", "")),
         ]
         _core_results, attempts, _fb = run_harness_improvement_loop(
-            state, agents, task_defs, enriched, self._run_improvement, on_progress, max_attempts=3
+            state, agent_defs, task_defs, enriched, _improve, on_progress, max_attempts=3
         )
         if pg is not None:
             pg.improvement_attempts = int(attempts)
@@ -841,253 +752,129 @@ class AutoPMFlow:
         if cb:
             cb(msg)
 
-    def _unique_agents_in_order(self, task_list: list[Task]) -> list[Any]:
-        """Crew 생성 시 Agent 중복·순서 문제를 피한다 — 리스트 순서 고정."""
-        seen: set[int] = set()
-        ordered: list[Any] = []
-        for t in task_list:
-            a = t.agent
-            aid = id(a)
-            if aid not in seen:
-                seen.add(aid)
-                ordered.append(a)
-        return ordered
-
-    def _run_pipeline(
+    def _run_deep_core_document(
         self,
         state: AutoPMState,
-        agents: dict[str, Any],
-        task_defs: dict[str, Any],
+        inputs: dict[str, str],
         enriched: dict[str, str],
+        pg: PPTGenerationState | None,
+        root: Path,
         on_progress: Callable[[str], None] | None,
-    ) -> None:
-        for idx, key in enumerate(_PIPELINE_KEYS):
-            spec = task_defs[key]
-            agent = agents[spec["agent"]]
-            field = _STATE_FIELDS[idx]
-            user_line = _PIPELINE_USER_MSG[idx]
-            phase_label = _PIPELINE_PHASE_LABELS[idx]
-            ag_key = spec["agent"]
-
-            def _make_cb(
-                fld: str = field,
-                ak: str = ag_key,
-                ul: str = user_line,
-                pl: str = phase_label,
-            ) -> Callable[[Any], None]:
-                def _cb(out: Any) -> None:
-                    state.current_phase = pl
-                    raw = getattr(out, "raw", None)
-                    text = raw if isinstance(raw, str) and raw.strip() else str(out)
-                    setattr(state, fld, text)
-                    agent_done(state, ak, pl)
-                    self._notify(on_progress, f"{ul} → 완료 ({ak})")
-
-                return _cb
-
-            desc = spec["description"].strip().format(**enriched)
-            self._notify(on_progress, f"{user_line} → 실행 중…")
-            task = Task(
-                description=desc,
-                expected_output=spec["expected_output"].strip(),
-                agent=agent,
-                callback=_make_cb(),
-            )
-            crew = Crew(
-                agents=[agent],
-                tasks=[task],
-                process=Process.sequential,
-                verbose=False,
-                memory=False,
-                tracing=False,
-            )
-            _crew_result_to_text(crew.kickoff(inputs=enriched))
-
-    def _run_critic_crew(
-        self,
-        state: AutoPMState,
-        agents: dict[str, Any],
-        task_defs: dict[str, Any],
-        enriched: dict[str, str],
-        on_progress: Callable[[str], None] | None,
+        *,
+        demo_mode: bool = False,
     ) -> str:
-        spec = task_defs["critic_task"]
-        agent = agents[spec["agent"]]
-        ctx = {**enriched, "draft": state.snapshot_for_critic()}
-        desc = spec["description"].strip().format(**ctx)
-        task = Task(
-            description=desc,
-            expected_output=spec["expected_output"].strip(),
-            agent=agent,
-            callback=lambda _o: self._notify(on_progress, "[Critic] 완료"),
+        """
+        Core 8 Agent + Critic + 문서화 — OpenAI Key 없어도 deep_runner fallback으로 동작한다.
+        demo_mode=True이면 Critic 루프는 1회만 돌리고 PPT 체인까지 이어 붙인다(FULL_AUTO용).
+        """
+        agent_defs = build_all_agent_defs()
+        task_defs = load_tasks()
+        state.current_phase = "phase_pipeline"
+        run_deep_pipeline(state, agent_defs, task_defs, enriched, on_progress)
+        save_autopm_checkpoint(root, "after_pipeline", state)
+        run_supervisor_checkpoint(
+            state, label="after_core", enriched=enriched, agent_defs=agent_defs
         )
-        crew = Crew(
-            agents=[agent],
-            tasks=[task],
-            process=Process.sequential,
-            verbose=False,
-            memory=False,
-            tracing=False,
-        )
-        return _crew_result_to_text(crew.kickoff(inputs=enriched)).strip()
+        self._harness_after_pipeline(state, inputs, pg, agent_defs, task_defs, enriched, on_progress)
 
-    def _run_improvement(
-        self,
-        state: AutoPMState,
-        agents: dict[str, Any],
-        task_defs: dict[str, Any],
-        enriched: dict[str, str],
-        target: str,
-        feedback: str,
-        on_progress: Callable[[str], None] | None,
-    ) -> None:
-        tkey, fld = _IMPROVEMENT_MAP[target]
-        spec = task_defs[tkey]
-        agent = agents[spec["agent"]]
-        block = (
-            f"\n### Self-Correction ({target}, round {state.loop_count + 1})\n"
-            f"{feedback}\n이전 본문을 보완·수정하라.\n"
-        )
-        local_enriched = {**enriched, "feedback_block": block}
-        desc = spec["description"].strip().format(**local_enriched)
+        state.current_phase = "critic_loop"
+        max_loops = 1 if demo_mode else state.max_loops
+        while True:
+            if on_progress:
+                on_progress(f"[Critic] 평가 중 (loop_count={state.loop_count})")
+            critic_text = run_deep_critic(state, agent_defs, task_defs, enriched, on_progress)
+            state.critic_review = critic_text
+            score, _status, target, notes, final_rec = _parse_critic_output(critic_text)
+            state.critic_score = score
+            state.critic_status = _status
+            state.feedback_target = target
+            state.feedback_text = notes
+            if final_rec:
+                state.final_recommendation = final_rec
+            if evaluate_gate(score):
+                state.pass_quality_gate = True
+                break
+            if score is None and target == "none":
+                break
+            if state.loop_count >= max_loops:
+                break
+            if target not in _IMPROVEMENT_MAP:
+                break
+            run_deep_improvement(
+                state, agent_defs, task_defs, enriched, target, notes, _IMPROVEMENT_MAP, on_progress
+            )
+            state.loop_count += 1
+            state.improvement_applied.append(f"{target}: {notes[:200]}")
 
-        def _cb(out: Any) -> None:
-            raw = getattr(out, "raw", None)
-            text = raw if isinstance(raw, str) and raw.strip() else str(out)
-            setattr(state, fld, text)
-            agent_done(state, spec["agent"], "improvement")
-            self._notify(on_progress, f"[보완] {target} ({spec['agent']})")
-
-        task = Task(
-            description=desc,
-            expected_output=spec["expected_output"].strip(),
-            agent=agent,
-            callback=_cb,
-        )
-        crew = Crew(
-            agents=[agent],
-            tasks=[task],
-            process=Process.sequential,
-            verbose=False,
-            memory=False,
-            tracing=False,
-        )
-        _crew_result_to_text(crew.kickoff(inputs=local_enriched))
-
-    def _run_documentation_crew(
-        self,
-        state: AutoPMState,
-        agents: dict[str, Any],
-        task_defs: dict[str, Any],
-        enriched: dict[str, str],
-        on_progress: Callable[[str], None] | None,
-    ) -> str:
-        spec = task_defs["documentation_task"]
-        agent = agents[spec["agent"]]
+        state.current_phase = "documentation"
         loop_meta = (
             f"loop_count={state.loop_count}, max_loops={state.max_loops}, "
-            f"pass_quality_gate={state.pass_quality_gate}, critic_score={state.critic_score}, "
-            f"feedback_target={state.feedback_target}, improvements={len(state.improvement_applied)}"
+            f"pass_quality_gate={state.pass_quality_gate}, critic_score={state.critic_score}"
         )
-        ctx = {
-            **enriched,
-            "loop_meta": loop_meta,
-            "orchestration_brief": state.orchestration_brief,
-            "requirement_analysis": state.requirement_analysis,
-            "business_analysis": state.business_analysis,
-            "solution_direction": state.solution_direction,
-            "development_scope": state.development_scope,
-            "wbs_plan": state.wbs_plan,
-            "budget_roi": state.budget_roi,
-            "risk_management": state.risk_management,
-            "critic_review": state.critic_review,
-        }
-        desc = spec["description"].strip().format(**ctx)
-        task = Task(
-            description=desc,
-            expected_output=spec["expected_output"].strip(),
-            agent=agent,
-            callback=lambda _o: self._notify(on_progress, "[문서화] 완료"),
-        )
-        crew = Crew(
-            agents=[agent],
-            tasks=[task],
-            process=Process.sequential,
-            verbose=False,
-            memory=False,
-            tracing=False,
-        )
-        return _crew_result_to_text(crew.kickoff(inputs=enriched)).strip()
+        try:
+            final_md = run_deep_documentation(
+                state, agent_defs, task_defs, enriched, loop_meta, on_progress
+            )
+        except Exception:
+            final_md = self._fallback_markdown(
+                state, reason="문서화 Deep Agent 실패 — rule-based 조립"
+            )
+        state.workspace_markdown = final_md
+        return final_md
 
-    def _run_single_agent_task(
+    def _run_ppt_deep_chain(
         self,
         state: AutoPMState,
-        agents: dict[str, Any],
-        task_defs: dict[str, Any],
-        ctx: dict[str, str],
-        task_key: str,
-        on_progress: Callable[[str], None] | None,
-        progress_label: str,
-    ) -> str:
-        """PPT 3단계처럼 단일 Task만 안전하게 실행할 때 사용한다 — 순차 컨텍스트 전달용."""
-        spec = task_defs[task_key]
-        agent = agents[spec["agent"]]
-        desc = spec["description"].strip().format(**ctx)
-        task = Task(
-            description=desc,
-            expected_output=spec["expected_output"].strip(),
-            agent=agent,
-            callback=lambda _o: self._notify(on_progress, progress_label),
-        )
-        crew = Crew(
-            agents=[agent],
-            tasks=[task],
-            process=Process.sequential,
-            verbose=False,
-            memory=False,
-            tracing=False,
-        )
-        return _crew_result_to_text(crew.kickoff(inputs=ctx)).strip()
-
-    def _run_ppt_crew_chain(
-        self,
-        state: AutoPMState,
-        agents: dict[str, Any],
+        agent_defs: dict[str, Any],
         task_defs: dict[str, Any],
         enriched: dict[str, str],
         final_markdown: str,
         on_progress: Callable[[str], None] | None,
     ) -> None:
-        """Storyline → Visualization → Presentation Graphics → Composer 순으로 JSON 슬라이드 덱을 만든다."""
+        """Storyline → Visualization → Graphics → Composer — Deep Agent 순차 실행."""
         title = enriched.get("proposal_title") or enriched.get("idea_title", "AutoPM")
         ctx1 = {**enriched, "final_markdown": final_markdown, "idea_title": title}
-        self._notify(on_progress, "[9/12] Storyline Agent: PPT 장표 흐름 설계")
-        out1 = self._run_single_agent_task(
-            state, agents, task_defs, ctx1, "slide_storyline_task", on_progress, "[9/12] Storyline 완료"
+        out1 = run_deep_single_task(
+            state,
+            agent_defs,
+            task_defs,
+            ctx1,
+            "slide_storyline_task",
+            on_progress,
+            "[9/12] Storyline Agent: PPT 장표 흐름 설계",
         )
         state.slide_storyline_raw = out1
         ctx2 = {**enriched, "storyline_json": out1}
-        self._notify(on_progress, "[10/12] Visualization Agent: 시각자료 타입 설계")
-        out2 = self._run_single_agent_task(
-            state, agents, task_defs, ctx2, "visualization_design_task", on_progress, "[10/12] Visualization 완료"
+        out2 = run_deep_single_task(
+            state,
+            agent_defs,
+            task_defs,
+            ctx2,
+            "visualization_design_task",
+            on_progress,
+            "[10/12] Visualization Agent: 시각자료 타입 설계",
         )
         state.visualization_raw = out2
         ctx3 = {**enriched, "visualization_json": out2}
-        self._notify(on_progress, "[11/12] Presentation Graphics: 장표·에셋 스펙 설계")
-        out3 = self._run_single_agent_task(
+        out3 = run_deep_single_task(
             state,
-            agents,
+            agent_defs,
             task_defs,
             ctx3,
             "presentation_graphics_task",
             on_progress,
-            "[11/12] Presentation Graphics 완료",
+            "[11/12] Presentation Graphics: 장표·에셋 스펙 설계",
         )
         state.presentation_graphics_raw = out3
         ctx4 = {**enriched, "visualization_json": out2, "presentation_graphics_json": out3}
-        self._notify(on_progress, "[12/12] PPT Composer: 최종 슬라이드 스펙 확정")
-        out4 = self._run_single_agent_task(
-            state, agents, task_defs, ctx4, "ppt_composition_task", on_progress, "[12/12] PPT Composer 완료"
+        out4 = run_deep_single_task(
+            state,
+            agent_defs,
+            task_defs,
+            ctx4,
+            "ppt_composition_task",
+            on_progress,
+            "[12/12] PPT Composer: 최종 슬라이드 스펙 확정",
         )
         state.ppt_composer_raw = out4
 
@@ -1098,7 +885,7 @@ class AutoPMFlow:
         root: Path,
         *,
         llm_ok: bool,
-        agents: dict[str, Any] | None,
+        agent_defs: dict[str, Any] | None,
         task_defs: dict[str, Any] | None,
         enriched: dict[str, str] | None,
         on_progress: Callable[[str], None] | None = None,
@@ -1130,10 +917,12 @@ class AutoPMFlow:
 
         deck_dict = build_slide_deck_spec(business_plan, {"subtitle": "AutoPM — 추진계획서"})
         llm_deck: SlideDeckSpec | None = None
-        if llm_ok and agents and task_defs and enriched:
+        if llm_ok and agent_defs and task_defs and enriched:
             try:
                 if not skip_chain:
-                    self._run_ppt_crew_chain(state, agents, task_defs, enriched, markdown_before_slides, on_progress)
+                    self._run_ppt_deep_chain(
+                        state, agent_defs, task_defs, enriched, markdown_before_slides, on_progress
+                    )
                 llm_deck = deck_from_llm_chain(
                     state.slide_storyline_raw,
                     state.visualization_raw,
@@ -1181,6 +970,22 @@ class AutoPMFlow:
         state.document_output = full_md
         export_run_artifacts(state, full_md)
 
+        if agent_defs and enriched:
+            pptx_p = state.artifacts.get("project_plan.pptx", "")
+            if pptx_p:
+                from autopm.orchestration.supervisor_manager import supervisor_agent_complete
+
+                supervisor_agent_complete(
+                    state,
+                    agent_id="ppt_composer",
+                    output=state.ppt_composer_raw or "",
+                    artifact_path=pptx_p,
+                )
+            run_supervisor_checkpoint(
+                state, label="after_ppt", enriched=enriched, agent_defs=agent_defs
+            )
+            run_supervisor_checkpoint(state, label="final", enriched=enriched, agent_defs=agent_defs)
+
         self._notify(on_progress, "[Harness] 최종 산출·PPT 품질 평가")
         try:
             h = EvaluationHarness()
@@ -1206,11 +1011,14 @@ class AutoPMFlow:
             imp_att = int(snap.get("core_improvement_attempts", 0))
             core_results = h.evaluate_all_core(state)
             chain: list[Any] = []
-            if (state.slide_storyline_raw or "").strip():
-                chain.append(h.evaluate_storyline(state.slide_storyline_raw))
-            if (state.visualization_raw or "").strip() and (state.slide_storyline_raw or "").strip():
-                chain.append(h.evaluate_visualization(state.visualization_raw, state.slide_storyline_raw))
-            if (state.presentation_graphics_raw or "").strip():
+            def _hs(v: object) -> str:
+                return v if isinstance(v, str) else str(v or "")
+
+            if _hs(state.slide_storyline_raw).strip():
+                chain.append(h.evaluate_storyline(_hs(state.slide_storyline_raw)))
+            if _hs(state.visualization_raw).strip() and _hs(state.slide_storyline_raw).strip():
+                chain.append(h.evaluate_visualization(_hs(state.visualization_raw), _hs(state.slide_storyline_raw)))
+            if _hs(state.presentation_graphics_raw).strip():
                 chain.append(h.evaluate_graphics(state.presentation_graphics_raw))
             pptx_p = Path(state.artifacts["project_plan.pptx"]) if state.artifacts.get("project_plan.pptx") else None
             chain.append(h.evaluate_composer_raw(state.ppt_composer_raw or "", pptx_p))

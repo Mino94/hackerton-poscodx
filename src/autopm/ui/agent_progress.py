@@ -151,7 +151,7 @@ def simulate_agent_progress(
     render_fn: Callable[[list[AgentStep]], None],
 ) -> None:
     """
-    CrewAI 호출 전 가벼운 시뮬레이션 — 각 Agent가 순차로 '실행 중' 후 다시 대기로 돌아가 웨이브만 보여준다.
+    Deep Agent 호출 전 가벼운 시뮬레이션 — 각 Agent가 순차로 '실행 중' 후 다시 대기로 돌아가 웨이브만 보여준다.
     (실제 완료는 run 이후 finalize에서 처리 — 요구사항 '실행 전 simulation'.)
     """
     for i, _s in enumerate(steps):
@@ -346,18 +346,21 @@ def fill_summaries_from_state(steps: list[AgentStep], result: Any) -> None:
         ("PPT Composer", "project_plan.pptx 생성 완료"),
     ]
 
+    outs = stt.agent_outputs or {}
     state_texts = [
-        stt.orchestration_brief,
-        stt.requirement_analysis,
-        stt.business_analysis,
-        stt.solution_direction,
-        stt.development_scope,
-        stt.wbs_plan,
-        stt.budget_roi,
-        _clip(stt.risk_management) + " | " + _clip(stt.critic_review),
-        _clip(stt.slide_storyline_raw),
-        _clip(stt.visualization_raw),
-        _clip(stt.presentation_graphics_raw),
+        outs.get("orchestrate_task") or stt.orchestration_brief,
+        outs.get("requirement_task") or stt.requirement_analysis,
+        outs.get("business_analysis_task") or stt.business_analysis,
+        outs.get("solution_design_task") or stt.solution_direction,
+        outs.get("development_scope_task") or stt.development_scope,
+        outs.get("wbs_task") or stt.wbs_plan,
+        outs.get("budget_roi_task") or stt.budget_roi,
+        _clip(outs.get("risk_critic_task") or stt.risk_management)
+        + " | "
+        + _clip(stt.critic_review),
+        _clip(outs.get("slide_storyline_task") or stt.slide_storyline_raw),
+        _clip(outs.get("visualization_design_task") or stt.visualization_raw),
+        _clip(outs.get("presentation_graphics_task") or stt.presentation_graphics_raw),
         arts.get("project_plan.pptx", ""),
     ]
 
@@ -403,6 +406,12 @@ def finalize_agent_dashboard(steps: list[AgentStep], result: Any) -> None:
         mark_all_complete(steps)
 
     fill_summaries_from_state(steps, result)
+    try:
+        from autopm.orchestration.supervisor_manager import sync_agent_steps_from_supervisor
+
+        sync_agent_steps_from_supervisor(steps, result.state)
+    except Exception:
+        pass
 
 
 __all__ = [

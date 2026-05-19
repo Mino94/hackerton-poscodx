@@ -273,13 +273,16 @@ def validate_slide_deck_content(deck_dict: dict[str, Any]) -> tuple[bool, list[s
     as_is_steps_ok = False
     to_be_steps_ok = False
 
+    def _txt(val: object) -> str:
+        return val if isinstance(val, str) else str(val or "")
+
     for s in slides_raw:
         if not isinstance(s, dict):
             continue
-        title = (s.get("title") or "").strip()
+        title = _txt(s.get("title")).strip()
         if not title:
             errs.append("제목 누락 슬라이드 존재")
-        if not (s.get("key_message") or s.get("objective") or "").strip():
+        if not (_txt(s.get("key_message")) or _txt(s.get("objective"))).strip():
             errs.append(f"key_message 부족: {title or s.get('slide_no')}")
         try:
             sp = SlideSpec.model_validate(s)
@@ -367,9 +370,12 @@ def merge_llm_deck_graphics(base_dict: dict[str, Any], llm_deck: SlideDeckSpec |
             if extra.graphics_spec:
                 sdict = dict(sdict)
                 sdict["graphics_spec"] = extra.graphics_spec
-            if (extra.key_message or "").strip() and len((extra.key_message or "")) > len((sdict.get("key_message") or "")):
+            km_extra = extra.key_message if isinstance(extra.key_message, str) else str(extra.key_message or "")
+            km_base = sdict.get("key_message")
+            km_base_s = km_base if isinstance(km_base, str) else str(km_base or "")
+            if km_extra.strip() and len(km_extra) > len(km_base_s):
                 sdict = dict(sdict)
-                sdict["key_message"] = extra.key_message
+                sdict["key_message"] = km_extra
         slides_out.append(sdict)
     out = dict(base_dict)
     out["slides"] = slides_out

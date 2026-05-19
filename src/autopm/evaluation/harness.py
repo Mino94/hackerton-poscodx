@@ -83,7 +83,8 @@ class CombinedHarnessReport:
 
 
 def _text_len_ok(t: str, n: int = 120) -> bool:
-    return len((t or "").strip()) >= n
+    s = t if isinstance(t, str) else str(t or "")
+    return len(s.strip()) >= n
 
 
 def _count_bullets(text: str) -> int:
@@ -138,7 +139,8 @@ def _core_field_text(state: AutoPMState, agent_id: str) -> str:
         "budget": state.budget_roi,
         "risk": state.risk_management,
     }
-    return m.get(agent_id, "") or ""
+    raw = m.get(agent_id, "") or ""
+    return raw if isinstance(raw, str) else str(raw)
 
 
 def _score_requirement(text: str) -> list[CriterionScore]:
@@ -188,7 +190,7 @@ def _score_solution(text: str, as_is_hint: str) -> list[CriterionScore]:
         CriterionScore(
             "sa_tobe_addresses",
             _contains_any(text, ("to-be", "tobe", "개선", "목표 설계"))
-            and len((as_is_hint or "").strip()) > 20,
+            and len((as_is_hint if isinstance(as_is_hint, str) else str(as_is_hint or "")).strip()) > 20,
             w,
             "TO-BE 연결",
         ),

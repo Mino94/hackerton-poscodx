@@ -1,6 +1,21 @@
-# AutoPM 아키텍처 (CrewAI + PPT MVP)
+# AutoPM 아키텍처 (Deep Agents + Sub-Agent + PPT MVP)
 
 이 문서는 **PPT 생성형 AutoPM** 기준으로 현재 레포 구현을 설명합니다.
+
+## Sub-Agent · 로컬 LLM
+
+각 Parent Agent(`agents.yaml`) 아래 **Sub-Agent 팀**이 `config/subagents.yaml`에 정의된다.
+
+| tier | 우선 LLM | 용도 |
+| --- | --- | --- |
+| `local` | Ollama (`langchain-ollama`) | 세분화 분석·피어 리뷰 |
+| `cloud` | OpenAI | synthesizer 통합·최종 형식 정리 |
+| `auto` | OpenAI → Ollama → rule fallback | 기타 |
+
+실행 순서: Sub-Agent 순차 실행 → Parent가 `tasks.yaml` 기대 형식으로 통합(`subagent_runner.py`).  
+산출은 `AutoPMState.subagent_outputs` · `outputs/subagent_outputs.json`에 기록된다.
+
+환경 변수: `OPEN_SOURCE_LLM_PROVIDER=ollama`, `AUTOPM_USE_LOCAL_LLM=true`, `AUTOPM_ENABLE_SUBAGENTS=true`(기본).
 
 ## 전체 워크플로
 
@@ -9,7 +24,7 @@ User Input (Streamlit)
   → Interview (Rule-based) — Harness: 입력 충분성
   → Draft (mock/OpenAI) — Harness: 초안 길이·구조
   → Gateway (rate limit / auth 스텁)
-  → AutoPMFlow: 8 Core PM Agents (순차 Crew)
+  → AutoPMFlow: 8 Core PM Agents (Deep Agents + Sub-Agent 팀, 순차)
   → Evaluation Harness — 코어 산출 루브릭 + Improvement Loop (최대 3회)
   → Critic Agent (점수 / FEEDBACK_TARGET) + Self-Correction (최대 3회, 80점 Gate)
   → Documentation Agent → Markdown §1~11
@@ -29,7 +44,7 @@ User Input (Streamlit)
 | Layer | 역할 | MVP 구현 |
 | --- | --- | --- |
 | Input Layer | 업무 아이디어 입력 | Streamlit Form |
-| Agent Layer | 추진계획서 본문 | CrewAI 8 Core + Critic + Documentation |
+| Agent Layer | 추진계획서 본문 | Deep Agents 8 Core + Sub-Agent + Critic + Documentation |
 | Storyline Layer | 장표 흐름 설계 | `slide_storyline_task` |
 | Visualization Layer | visual_type·content | `visualization_design_task` |
 | **Presentation Graphics Layer** | graphics_spec·에셋 계획 | `presentation_graphics_task` + `ppt/graphics_agent.py` |
@@ -46,7 +61,9 @@ src/autopm/
   ppt/       # slide_schema, layout_engine, visual_builder, graphics_*, chart/diagram_renderer, visual_registry, ppt_composer, deck_json
   orchestration/flow.py  # 파이프라인 + Critic + PPT 체인 + finalize
   services/export_service.py
-  config/agents.yaml, tasks.yaml
+  config/agents.yaml, tasks.yaml, subagents.yaml
+  agents/subagent_runner.py, deep_runner.py
+  services/llm_router.py  # invoke_with_tier, Ollama
 ```
 
 ## AutoPMState

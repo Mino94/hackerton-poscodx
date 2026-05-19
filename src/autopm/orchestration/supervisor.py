@@ -1,4 +1,4 @@
-"""Supervisor — State·Phase·Critic Loop·최종 산출 통합을 책임진다(Code-only 역할)."""
+"""Supervisor — 전 Agent 진행·산출·체크포인트를 관리하는 PM Orchestrator 계층."""
 
 from __future__ import annotations
 
@@ -10,7 +10,13 @@ if TYPE_CHECKING:
 
 
 class Supervisor:
-    """YAML에 없는 오케스트레이션 두뇌 — CrewAI Crew 호출은 Flow에 위임한다."""
+    """
+    AutoPM Supervisor PM.
+    - 실행 전: 전 Agent 레지스트리 등록 (supervisor_manager.init_supervisor)
+    - 실행 중: 단계별 start/complete·대화·체크포인트 (deep_pipeline 연동)
+    - 실행 후: supervisor_report.json · UI 대시보드
+    Flow 호출은 이 클래스를 통해서만 진입한다.
+    """
 
     def execute(
         self,

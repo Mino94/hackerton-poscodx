@@ -125,3 +125,59 @@ FIELD_LABELS_KR: dict[str, str] = {
 
 # to_autopm_inputs 시 비어 있을 때 붙이는 안내 — Crew가 멈추지 않게 한다.
 ASSUMPTION_SUFFIX = " (AutoPM 가정·추후 확정 필요)"
+
+# UI 빠른 선택 버튼 — 번호 대신 라벨을 그대로 답변으로 저장한다.
+FIELD_QUICK_CHOICES: dict[str, list[str]] = {
+    "proposal_purpose": [
+        "경영진 보고용",
+        "고객 제안용",
+        "내부 개선안",
+        "예산 승인용",
+        "시스템 구축 제안용",
+    ],
+    "presentation_tone": [
+        "경영진 보고형",
+        "컨설팅 제안서형",
+        "실무 추진계획형",
+        "기술 아키텍처형",
+        "투자/예산 승인형",
+    ],
+}
+
+# 건너뛰기 시 채울 기본값
+FIELD_SKIP_DEFAULTS: dict[str, str] = {
+    "timeline": "미정 (추후 협의)",
+    "budget_range": "내부 협의 범위 (가정)",
+    "related_departments": "관련 부서 협의 예정",
+    "monthly_hours": "40",
+    "people_count": "3",
+    "expected_effects": "업무 시간 절감·오류 감소 (가정)",
+}
+
+PURPOSE_BY_NUM: dict[str, str] = {
+    "1": "경영진 보고용",
+    "2": "고객 제안용",
+    "3": "내부 개선안",
+    "4": "예산 승인용",
+    "5": "시스템 구축 제안용",
+}
+
+TONE_BY_NUM: dict[str, str] = {
+    "1": "경영진 보고형",
+    "2": "컨설팅 제안서형",
+    "3": "실무 추진계획형",
+    "4": "기술 아키텍처형",
+    "5": "투자/예산 승인형",
+}
+
+
+def normalize_field_answer(field: str, answer: str) -> str:
+    """번호만 입력해도 선택지 문구로 변환한다."""
+    a = (answer or "").strip()
+    if not a:
+        return a
+    if field == "proposal_purpose" and a in PURPOSE_BY_NUM:
+        return PURPOSE_BY_NUM[a]
+    if field == "presentation_tone" and a in TONE_BY_NUM:
+        return TONE_BY_NUM[a]
+    return a

@@ -6,7 +6,14 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
-from autopm.chat.question_rules import ASSUMPTION_SUFFIX, FIELD_LABELS_KR, PRIMARY_FIELD_ORDER
+from autopm.chat.question_rules import (
+    ASSUMPTION_SUFFIX,
+    FIELD_LABELS_KR,
+    FIELD_QUESTIONS,
+    FIELD_SKIP_DEFAULTS,
+    PRIMARY_FIELD_ORDER,
+    normalize_field_answer,
+)
 
 
 @dataclass
@@ -163,9 +170,31 @@ class InterviewState:
                 missing.append("people_count")
         return missing
 
+    def current_field(self) -> str | None:
+        """지금 답해야 할 필드 키 — 없으면 인터뷰 완료."""
+        missing = self.get_missing_fields()
+        return missing[0] if missing else None
+
+    def current_question_label(self) -> str:
+        """UI 헤더용 짧은 라벨."""
+        f = self.current_field()
+        if not f:
+            return "인터뷰 완료"
+        return FIELD_LABELS_KR.get(f, f)
+
+    def current_question_body(self) -> str:
+        """UI에 크게 보여줄 질문 본문."""
+        f = self.current_field()
+        if not f:
+            return (
+                "필수 질문을 모두 받았습니다. **PPT 자동 생성** 버튼을 눌러 주세요. "
+                "일부는 가정값으로 채워질 수 있습니다."
+            )
+        return FIELD_QUESTIONS.get(f, f"{f}에 대해 알려 주세요.")
+
     def update_from_answer(self, field: str, answer: str) -> None:
         """특정 필드에 답변 반영 — 숫자 필드는 정수 파싱 시도."""
-        answer = (answer or "").strip()
+        answer = normalize_field_answer(field, (answer or "").strip())
         if field in ("monthly_hours", "people_count"):
             m = re.search(r"(\d+)", answer.replace(",", ""))
             if m:
@@ -174,6 +203,26 @@ class InterviewState:
         setattr(self, field, answer or None)
         if field == "proposal_title":
             self.idea_title = (answer or None) or self.idea_title
+
+    def skip_current_field(self) -> bool:
+        """선택/후순위 항목을 기본값으로 채우고 True — 핵심 필드는 False."""
+        field = self.current_field()
+        if not field:
+            return False
+        skippable = set(FIELD_SKIP_DEFAULTS) | {
+            "timeline",
+            "budget_range",
+            "related_departments",
+            "monthly_hours",
+            "people_count",
+        }
+        if field not in skippable:
+            return False
+        val = FIELD_SKIP_DEFAULTS.get(field, "미정 (가정)")
+        self.update_from_answer(field, val)
+        self.chat_history.append({"role": "user", "content": f"⏭ 건너뛰기 → {val}"})
+        self.chat_history.append({"role": "assistant", "content": self.current_question_body()})
+        return True
 
     def is_ready_for_generation(self) -> bool:
         return True
@@ -332,3 +381,7 @@ class InterviewState:
                 disp = (val or "—") if ok else "—"
             rows.append((label, disp, ok))
         return rows
+
+
+# 스펙 문서·신규 코드에서 proposal 중심 이름을 쓸 수 있게 alias를 둔다.
+ProposalInterviewState = InterviewState

@@ -28,7 +28,8 @@ OPENAI_MODEL = "gpt-4o-mini"
 ## 3. 고급 설정 (권장)
 
 - **Python version**: **3.12**  
-- 첫 빌드: `requirements.txt`(crewai 등) 때문에 **몇 분** 걸릴 수 있음.
+- 첫 빌드: `requirements.txt`(deepagents·langchain 등) 때문에 **몇 분** 걸릴 수 있음.
+- `main` 브랜치에 push 하면 연결된 앱은 보통 **자동 재배포**됩니다.
 
 ## 4. 문제 시
 

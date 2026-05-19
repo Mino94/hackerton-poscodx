@@ -12,6 +12,8 @@ from autopm.ppt.slide_schema import SlideDeckSpec, SlideSpec
 
 def extract_json_object(text: str) -> dict[str, Any] | None:
     """ fenced code 또는 본문 전체에서 JSON 객체를 찾는다 — 데모 안정성 우선."""
+    if text is not None and not isinstance(text, str):
+        text = str(text)
     if not text or not text.strip():
         return None
     s = text.strip()

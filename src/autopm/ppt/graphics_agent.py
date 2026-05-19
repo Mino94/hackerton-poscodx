@@ -69,9 +69,13 @@ def overlay_storyline_visual_on_deck(deck: SlideDeckSpec, storyline: dict[str, A
         if r:
             if not d.get("content"):
                 d["content"] = r.content
-            if not (d.get("visual_type") or "").strip():
+            vt_cur = d.get("visual_type")
+            vt_str = vt_cur if isinstance(vt_cur, str) else str(vt_cur or "")
+            if not vt_str.strip():
                 d["visual_type"] = r.visual_type
-            if not (d.get("key_message") or "").strip():
+            km_cur = d.get("key_message")
+            km_str = km_cur if isinstance(km_cur, str) else str(km_cur or "")
+            if not km_str.strip():
                 d["key_message"] = r.key_message or ""
         out.append(SlideSpec.model_validate(d))
     return SlideDeckSpec(project_title=deck.project_title, subtitle=deck.subtitle, slides=out)

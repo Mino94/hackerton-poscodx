@@ -157,6 +157,46 @@ def export_run_artifacts(state: AutoPMState, final_markdown: str) -> dict[str, s
     except OSError:
         state.errors.append("export critic_review.md failed")
 
+    try:
+        dlg_path = root / "agent_dialogue.json"
+        dlg_path.write_text(
+            json.dumps(
+                {
+                    "dialogue": list(state.agent_dialogue),
+                    "agent_outputs_keys": sorted(state.agent_outputs.keys()),
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+        paths["agent_dialogue.json"] = str(dlg_path.resolve())
+    except OSError:
+        state.errors.append("export agent_dialogue.json failed")
+
+    try:
+        from autopm.orchestration.supervisor_manager import supervisor_report_dict
+
+        sup_path = root / "supervisor_report.json"
+        sup_path.write_text(
+            json.dumps(supervisor_report_dict(state), ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        paths["supervisor_report.json"] = str(sup_path.resolve())
+    except OSError:
+        state.errors.append("export supervisor_report.json failed")
+
+    # Sub-Agent 실행 기록 — Parent별 세분화 산출(UI·디버그)
+    try:
+        sub_path = root / "subagent_outputs.json"
+        sub_path.write_text(
+            json.dumps(dict(state.subagent_outputs), ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        paths["subagent_outputs.json"] = str(sub_path.resolve())
+    except OSError:
+        state.errors.append("export subagent_outputs.json failed")
+
     # 표 기반 CSV는 단순 휴리스틱 — 완전 파싱이 아니라 데모용 스켈레톤
     wbs_block = _extract_section(final_markdown, r"##\s+7\.\s*WBS\s*\n(.*?)(?=\n##\s+|\Z)")
     try:

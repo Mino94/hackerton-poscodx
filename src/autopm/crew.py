@@ -1,4 +1,4 @@
-"""CrewAI 실행 진입점 — L3 Orchestration으로 위임한다(기존 import 경로 유지)."""
+"""AutoPM 실행 진입점 — L3 Deep Agents Orchestration으로 위임(기존 import 경로 유지)."""
 
 from __future__ import annotations
 

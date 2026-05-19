@@ -1,10 +1,8 @@
-"""AutoPM Streamlit — 좌측 Rule-based 인터뷰 / 우측 수집 요약·Agent Progress / 하단 PPT·산출물."""
+﻿"""AutoPM Streamlit — 3탭: 인터뷰 / 수집·진행 / 산출물."""
 
 from __future__ import annotations
 
-import json
 import os
-import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -20,7 +18,6 @@ if str(_SRC) not in sys.path:
 from autopm.chat import InterviewBot, InterviewState  # noqa: E402
 from autopm.crew import run_autopm, run_autopm_phased  # noqa: E402
 from autopm.state.ppt_generation_state import (  # noqa: E402
-    GUIDED_STEP_LABELS,
     PHASE_COMPOSER,
     PHASE_CORE_DOC,
     PHASE_DRAFT_ONLY,
@@ -30,7 +27,6 @@ from autopm.state.ppt_generation_state import (  # noqa: E402
     PHASE_STORYLINE,
     PHASE_VISUALIZATION,
     PPTGenerationState,
-    STEP_ORDER,
 )
 from autopm.ui.agent_progress import (  # noqa: E402
     apply_progress_message,
@@ -39,6 +35,9 @@ from autopm.ui.agent_progress import (  # noqa: E402
     render_agent_progress,
     simulate_agent_progress,
 )
+from autopm.ui.compact_tabs import inject_compact_css, render_progress_tab  # noqa: E402
+from autopm.ui.interview_panel import render_interview_tab  # noqa: E402
+from autopm.ui.results_panel import render_results_tab  # noqa: E402
 
 load_dotenv()
 
@@ -48,7 +47,7 @@ _LAYERS_KR = """
 | --- | --- |
 | **L1 Presentation** | Streamlit (본 화면) |
 | **L2 API/Auth** | `api/gateway.py` 어댑터 + auth/rate_limit 스텁 |
-| **L3 Orchestration** | CrewAI + Supervisor + `AutoPMFlow` + Critic + PPT Crew |
+| **L3 Orchestration** | Deep Agents + Supervisor + `AutoPMFlow` + Agent 대화 + PPT 파이프라인 |
 | **L4 Tools/Services** | `tools/`, `services/`, `ppt/` (python-pptx Composer) |
 | **L5 Data** | `data/` + `outputs/` (md/pptx/json/csv) |
 """
@@ -57,64 +56,6 @@ _SIDEBAR = """
 **Supervisor** — 추진계획서 주제 입력 → 인터뷰(목적·배경·문제·톤) → 8 Core 태스크 → Critic → 문서화 →
 **Storyline / Visualization / Presentation Graphics / Composer** → `project_plan.pptx`
 """
-
-
-def _split_numbered_sections(text: str) -> dict[int, str]:
-    sections: dict[int, list[str]] = {}
-    current: int | None = None
-    preamble: list[str] = []
-
-    for line in text.splitlines():
-        m = re.match(r"^##\s+(\d+)\.\s+.*$", line)
-        if m:
-            idx = int(m.group(1))
-            current = idx
-            sections.setdefault(idx, []).append(line)
-            continue
-        if current is None:
-            preamble.append(line)
-        else:
-            sections[current].append(line)
-
-    out = {k: "\n".join(v).strip() for k, v in sections.items()}
-    if preamble:
-        pre = "\n".join(preamble).strip()
-        if pre:
-            out[0] = pre
-    return out
-
-
-def _join_sections(parts: dict[int, str], start: int, end: int) -> str:
-    chunks = []
-    for i in range(start, end + 1):
-        if i in parts:
-            chunks.append(parts[i])
-    return "\n\n".join(chunks).strip()
-
-
-def _outline_json(text: str) -> str:
-    sections = _split_numbered_sections(text)
-    outline: dict[str, str] = {}
-    for num in sorted(k for k in sections if k > 0):
-        first = sections[num].splitlines()[0] if sections[num] else ""
-        outline[str(num)] = first
-    return json.dumps(outline, ensure_ascii=False, indent=2)
-
-
-def _slide_count_from_json(path_str: str | None) -> int | None:
-    if not path_str:
-        return None
-    p = Path(path_str)
-    if not p.is_file():
-        return None
-    try:
-        data = json.loads(p.read_text(encoding="utf-8"))
-        slides = data.get("slides")
-        if isinstance(slides, list):
-            return len(slides)
-    except (OSError, json.JSONDecodeError):
-        return None
-    return None
 
 
 def _ensure_session_defaults() -> None:
@@ -166,58 +107,91 @@ st.set_page_config(page_title="AutoPM", layout="wide", initial_sidebar_state="ex
 
 
 def _secrets_into_os_environ() -> None:
-    # Streamlit Cloud의 TOML Secrets는 os.environ에 자동 주입되지 않는 경우가 있어, llm_router 등 getenv 경로와 맞춘다.
+    """
+    Streamlit Cloud secrets.toml → os.environ.
+    로컬에 secrets.toml이 없으면 .env(load_dotenv)만 쓰고 조용히 넘어간다.
+    (`key in st.secrets`는 파일 없을 때 StreamlitSecretNotFoundError를 낸다.)
+    """
     try:
-        sec = st.secrets
-    except Exception:
-        return
-    for key in (
+        from streamlit.errors import StreamlitSecretNotFoundError
+    except ImportError:
+        StreamlitSecretNotFoundError = type("_SecretNotFound", (Exception,), {})  # type: ignore[misc, assignment]
+
+    keys = (
         "OPENAI_API_KEY",
         "OPENAI_MODEL",
         "OPEN_SOURCE_LLM_PROVIDER",
         "OLLAMA_HOST",
         "OLLAMA_MODEL",
         "AUTOPM_RATE_LIMIT_PER_MIN",
-    ):
-        if key in sec:
+        "AUTOPM_USE_LOCAL_LLM",
+        "AUTOPM_ENABLE_SUBAGENTS",
+    )
+    try:
+        sec = st.secrets
+    except StreamlitSecretNotFoundError:
+        return
+    except Exception:
+        return
+
+    for key in keys:
+        try:
             val = sec[key]
-            if val is not None and str(val).strip():
-                os.environ.setdefault(key, str(val))
+        except StreamlitSecretNotFoundError:
+            return
+        except (KeyError, TypeError):
+            continue
+        if val is not None and str(val).strip():
+            os.environ.setdefault(key, str(val))
 
 
 _secrets_into_os_environ()
 _ensure_session_defaults()
+inject_compact_css()
 
-st.title("AutoPM")
-st.caption("추진계획서 제목만 입력하면, Agent가 필요한 내용을 질문하고 발표 가능한 PPT를 생성합니다.")
-run_mode = st.radio(
-    "실행 모드",
-    ["Guided", "Auto"],
-    index=0 if st.session_state.run_mode == "Guided" else 1,
-    horizontal=True,
-    help="Guided: 단계별 승인·선택. Auto: 한 번에 끝까지 생성.",
-)
+h1, h2 = st.columns([3, 1])
+with h1:
+    st.title("AutoPM")
+    st.caption("인터뷰 → Agent 분석 → 발표용 추진계획서 PPT")
+with h2:
+    run_mode = st.radio(
+        "모드",
+        ["Guided", "Auto"],
+        index=0 if st.session_state.run_mode == "Guided" else 1,
+        horizontal=True,
+        label_visibility="collapsed",
+    )
 st.session_state.run_mode = run_mode
-
-with st.expander("12단계 진행 상태 (User Decision State)", expanded=False):
-    pg_s = _get_pg()
-    cols = st.columns(4)
-    for i, sid in enumerate(STEP_ORDER):
-        with cols[i % 4]:
-            stat = pg_s.step_statuses.get(sid, "pending")
-            st.caption(f"**{GUIDED_STEP_LABELS.get(sid, sid)}**")
-            st.caption(f"`{stat}`")
-
-with st.expander("5-Layer Architecture — MVP 매핑", expanded=False):
-    st.markdown(_LAYERS_KR)
 
 with st.sidebar:
     st.subheader("워크플로")
     st.markdown(_SIDEBAR)
+    st.markdown(
+        "**인터뷰 사용법**\n"
+        "1. 주제 입력 → **인터뷰 시작**\n"
+        "2. 파란 질문 박스 확인\n"
+        "3. 하단 입력창에 답하고 **Enter**"
+    )
+    with st.expander("5-Layer Architecture", expanded=False):
+        st.markdown(_LAYERS_KR)
     st.divider()
+    try:
+        from autopm.services.llm_router import get_llm_routing_status
+
+        _llm = get_llm_routing_status()
+        st.caption("**LLM 라우팅**")
+        st.caption(
+            f"OpenAI: {'ON' if _llm.get('openai_configured') else 'OFF'} · "
+            f"로컬(Ollama): {'ON' if _llm.get('local_llm_enabled') else 'OFF'} · "
+            f"Sub-Agent: {'ON' if _llm.get('subagents_enabled') else 'OFF'}"
+        )
+        if _llm.get("local_llm_enabled"):
+            st.caption(f"Ollama: `{_llm.get('ollama_model')}` @ `{_llm.get('ollama_host')}`")
+    except Exception:
+        pass
     st.caption(
-        "`OPEN_SOURCE_LLM_PROVIDER=mock` 이면 API Key 없이도 초안·Fallback PPT가 동작합니다. "
-        "OpenAI Key가 있으면 Crew 단계와 refine이 추가로 실행됩니다."
+        "`OPEN_SOURCE_LLM_PROVIDER=ollama` 또는 `AUTOPM_USE_LOCAL_LLM=true` 이면 Sub-Agent·피어 리뷰에 로컬 LLM을 씁니다. "
+        "mock이면 rule-based fallback으로도 PPT가 생성됩니다."
     )
     if st.button("새 인터뷰 초기화", help="대화·수집 상태를 비웁니다."):
         st.session_state.interview_state = InterviewState().to_dict()
@@ -228,156 +202,32 @@ with st.sidebar:
         st.session_state.autopm_state_json = None
         st.session_state.crew_inputs = {}
         st.session_state.guided_ui_step = "input_confirm"
+        for _wk in ("interview_chat_input", "seed_idea"):
+            st.session_state.pop(_wk, None)
         st.rerun()
 
-left_col, right_col = st.columns([0.48, 0.52])
+tab_interview, tab_progress, tab_results = st.tabs(
+    ["💬 인터뷰·프로세스", "📊 수집·진행", "📁 산출물"],
+)
 
-start_clicked = False
-next_clicked = False
-gen_clicked = False
-seed = ""
-ans = ""
-
-with left_col:
-    st.subheader("대화형 인터뷰")
-    st.caption(
-        "AutoPM이 추진 **목적**, **배경**, **문제점**, **개선 범위**, **강조 포인트**, **PPT 톤**을 질문해 **PPT 방향**을 잡습니다."
+with tab_interview:
+    start_clicked, gen_clicked, seed = render_interview_tab(
+        st.session_state.run_mode,
+        _get_iv,
+        _save_iv,
+        st.session_state.interview_started,
     )
-    seed = st.text_area(
-        "작성할 추진계획서 주제/제목을 입력하세요.",
-        value="",
-        height=100,
-        placeholder=(
-            "예: 포스코 2026년 미래전략을 위한 Mini ERP 시스템 원가시스템 개선 제안 추진계획서"
-        ),
-        key="seed_idea",
-        help="제목·주제만 적어도 됩니다. 이후 봇이 목적·배경 등을 순서대로 묻습니다.",
+with tab_progress:
+    overall_progress, dash_placeholder = render_progress_tab(
+        _get_iv,
+        _save_iv,
+        st.session_state.agent_steps,
+        st.session_state.last_result,
+        st.session_state.ppt_gen,
     )
-    b_start, _b_spacer = st.columns([1, 3])
-    with b_start:
-        start_clicked = st.button("인터뷰 시작", type="secondary")
 
-    st.divider()
-    st.caption("인터뷰 대화")
-    iv = _get_iv()
-    for msg in iv.chat_history:
-        with st.chat_message(msg.get("role", "user")):
-            st.markdown(msg.get("content", ""))
-
-    ans = st.text_area(
-        "답변 입력",
-        value="",
-        height=88,
-        key="chat_answer_box",
-        help="봇의 현재 질문에 답한 뒤 **다음 질문**을 누릅니다.",
-    )
-    c_next, c_ppt = st.columns(2)
-    with c_next:
-        next_clicked = st.button("다음 질문", disabled=not st.session_state.interview_started)
-    with c_ppt:
-        if st.session_state.run_mode == "Auto":
-            gen_clicked = st.button("🚀 AutoPM PPT 자동 생성", type="primary")
-        else:
-            gen_clicked = False
-            st.button("🚀 Guided는 하단 패널", disabled=True)
-
-with right_col:
-    st.subheader("수집 정보·진행률")
-    iv2 = _get_iv()
-    filled = iv2.filled_count()
-    total = iv2.total_fields()
-    st.metric("필수 정보 수집률", f"{filled}/{total} 완료")
-    st.progress(min(1.0, filled / max(1, total)))
-
-    if iv2.has_assumptions():
-        st.warning("일부 정보가 부족하여 AutoPM이 **가정값**을 사용합니다. 인터뷰를 더 진행하거나 아래에서 상세를 수정하세요.")
-
-    st.markdown("##### 수집 항목 요약")
-    for label, disp, ok in iv2.summary_rows():
-        icon = "✅" if ok else "⏳"
-        st.markdown(f"{icon} **{label}** — {disp}")
-
-    with st.expander("상세 필드 직접 수정", expanded=False):
-        st.caption("Rule-based 흐름을 건너뛰고 값만 빠르게 고칠 때 사용합니다.")
-        m = _get_iv()
-        with st.form("manual_interview_form"):
-            st.markdown("**핵심(추진계획서)**")
-            pt = st.text_input(
-                "추진계획서 주제/제목",
-                value=m.proposal_title or m.idea_title or "",
-            )
-            ppur = st.text_input("목적", value=m.proposal_purpose or "")
-            bg = st.text_area("배경", value=m.background_context or "", height=64)
-            prob = st.text_area("핵심 문제", value=m.current_problems or m.pain_points or "", height=56)
-            ts = st.text_input("대상 시스템", value=m.target_system or "")
-            bs = st.text_area("업무·기능 범위", value=m.business_scope or "", height=56)
-            imp = st.text_area("개선 방향", value=m.improvement_direction or m.goal or "", height=56)
-            aud = st.text_input("보고 대상·의사결정자", value=m.target_audience or "")
-            emph = st.text_input("강조 포인트", value=m.key_emphasis or "")
-            tone = st.text_input("PPT 톤", value=m.presentation_tone or "")
-            st.markdown("**실행 정보(후순위)**")
-            rd = st.text_input("관련 부서", value=m.related_departments or "")
-            tl = st.text_input("희망 추진 기간", value=m.timeline or "")
-            br = st.text_input("예산 범위", value=m.budget_range or "")
-            eff = st.text_area("기대 효과", value=m.expected_effects or "", height=48)
-            cons = st.text_area("제약·전제", value=m.constraints or "", height=40)
-            refm = st.text_input("참고 자료", value=m.reference_materials or "")
-            st.markdown("**리소스(선택 — 효율·절감 강조 시 인터뷰에서 별도 질문)**")
-            mh = st.number_input(
-                "월 소요 시간(시간)",
-                min_value=0,
-                value=int(m.monthly_hours) if m.monthly_hours is not None else 0,
-            )
-            pc = st.number_input(
-                "관련 인원(명)",
-                min_value=0,
-                value=int(m.people_count) if m.people_count is not None else 0,
-            )
-            st.caption("레거시 필드(AS-IS 텍스트용)")
-            cp = st.text_area("현재 업무 요약(선택)", value=m.current_process or "", height=48)
-            submitted = st.form_submit_button("요약 카드에 반영")
-        if submitted:
-            m.proposal_title = pt.strip() or None
-            m.idea_title = m.proposal_title
-            m.proposal_purpose = ppur.strip() or None
-            m.background_context = bg.strip() or None
-            m.current_problems = prob.strip() or None
-            m.pain_points = m.current_problems
-            m.target_system = ts.strip() or None
-            m.business_scope = bs.strip() or None
-            m.improvement_direction = imp.strip() or None
-            m.goal = m.improvement_direction
-            m.target_audience = aud.strip() or None
-            m.key_emphasis = emph.strip() or None
-            m.presentation_tone = tone.strip() or None
-            m.related_departments = rd.strip() or None
-            m.timeline = tl.strip() or None
-            m.budget_range = br.strip() or None
-            m.expected_effects = eff.strip() or None
-            m.constraints = cons.strip() or None
-            m.reference_materials = refm.strip() or None
-            m.monthly_hours = int(mh) if mh > 0 else None
-            m.people_count = int(pc) if pc > 0 else None
-            m.current_process = cp.strip() or None
-            _save_iv(m)
-            st.success("반영되었습니다.")
-            st.rerun()
-
-    st.divider()
-    st.subheader("Agent Progress Dashboard")
-    overall_progress = st.progress(0.0)
-    dash_placeholder = st.empty()
-
-    if st.session_state.agent_steps:
-        with dash_placeholder.container():
-            render_agent_progress(
-                st.session_state.agent_steps,
-                progress_callback=overall_progress.progress,
-            )
-        overall_progress.progress(1.0 if st.session_state.last_result else 0.0)
-    else:
-        with dash_placeholder.container():
-            st.info("**Auto** 실행 또는 **Guided** 패널 진행 시 12단계 Agent 진행 상황이 여기에 표시됩니다.")
+with tab_results:
+    render_results_tab(st.session_state.last_result, st.session_state.agent_steps)
 
 
 def _dash_render(steps_list: list) -> None:
@@ -397,19 +247,8 @@ if start_clicked:
         st.session_state.interview_started = True
         st.rerun()
 
-if next_clicked:
-    if not st.session_state.interview_started:
-        st.warning("먼저 **인터뷰 시작**을 눌러 주세요.")
-    elif not (ans or "").strip():
-        st.warning("답변을 입력해 주세요.")
-    else:
-        b = InterviewBot(_get_iv())
-        b.apply_chat_answer(ans)
-        _save_iv(b.state)
-        st.session_state["chat_answer_box"] = ""
-        st.rerun()
-
 if gen_clicked:
+    st.toast("생성 중 — **수집·진행** 탭에서 Agent 상태를 확인하세요.", icon="⏳")
     s_run = _get_iv()
     inputs = s_run.to_autopm_inputs()
     agent_steps = get_agent_steps()
@@ -428,7 +267,7 @@ if gen_clicked:
             _dash_render(agent_steps)
 
         status.write(
-            "추진계획서 주제·인터뷰 → mock/ollama 초안 → (선택) OpenAI refine → CrewAI → PPT Crew → python-pptx"
+            "추진계획서 주제·인터뷰 → mock/ollama 초안 → (선택) OpenAI refine → Deep Agents(대화·고도화) → PPT → python-pptx"
         )
         inputs.update({k: str(v) for k, v in st.session_state.crew_inputs.items() if v})
         status.write(f"실행 입력 키: `{', '.join(sorted(inputs.keys()))}`")
@@ -480,9 +319,10 @@ def _run_guided_phase(
     )
 
 
-if st.session_state.run_mode == "Guided":
+def _render_guided_panel() -> None:
+    """Guided 모드 — 인터뷰 탭 하단에서 단계별 승인 UI."""
     st.divider()
-    st.subheader("User Decision Panel (Guided)")
+    st.markdown("##### Guided — 단계별 승인")
     rev = st.text_area("Revision / 수정 요청", height=60, key="guided_revision_box")
     pg = _get_pg()
     gu = st.session_state.guided_ui_step
@@ -604,7 +444,7 @@ if st.session_state.run_mode == "Guided":
             st.rerun()
 
     elif gu == "core_run":
-        st.markdown("##### 6–7) Core Crew + 문서 (승인 후 실행)")
+        st.markdown("##### 6–7) Core Deep Agents + 문서 (승인 후 실행)")
         if st.button("현재 단계 승인 → Core+문서 생성", type="primary"):
             inputs = _base_inputs_from_interview()
             agent_steps = get_agent_steps()
@@ -870,271 +710,13 @@ if st.session_state.run_mode == "Guided":
             _mark_steps(pg, "post_ppt_review", status="complete")
             st.session_state.guided_ui_step = "done"
             _save_pg(pg)
-            st.success("Guided 플로를 확정했습니다. 하단 산출물 탭에서 다운로드하세요.")
+            st.success("Guided 플로를 확정했습니다. **산출물** 탭에서 다운로드하세요.")
             st.rerun()
 
     elif gu == "done":
         st.info("Guided 세션 확정됨 — 필요 시 **새 인터뷰 초기화**로 처음부터 다시 시작하세요.")
 
-st.subheader("산출물 (PPT · Slide Plan · Visual Asset · 문서)")
 
-result = st.session_state.last_result
-if not result:
-    st.info(
-        "**Auto**: 주제 입력·인터뷰 후 **자동 생성**. **Guided**: 하단 패널에서 단계별 승인 후 산출물이 열립니다."
-    )
-else:
-    st.subheader("Supervisor State & Critic Loop")
-    c1, c2, c3 = st.columns(3)
-    with c1:
-        st.metric("Critic Score", result.state.critic_score if result.state.critic_score is not None else "—")
-    with c2:
-        st.metric("PASS Gate (≥80)", "PASS" if result.state.pass_quality_gate else "FAIL")
-    with c3:
-        st.metric("Loop Count", f"{result.state.loop_count} / {result.state.max_loops}")
-
-    st.caption(
-        f"Phase: `{result.state.current_phase}` | Feedback Target: `{result.state.feedback_target or '—'}` | "
-        f"Improvements: {len(result.state.improvement_applied)}"
-    )
-
-    if st.session_state.agent_steps:
-        st.subheader("Agent 산출 요약")
-        rows = []
-        for ag in st.session_state.agent_steps:
-            rows.append(
-                {
-                    "Agent": ag.display_name,
-                    "상태": ag.status,
-                    "산출물": (ag.artifact or "")[:120],
-                    "완료 메시지": ag.completion_message or "",
-                }
-            )
-        st.dataframe(rows, hide_index=True, use_container_width=True)
-
-    with st.expander("Structured JSON / Logs", expanded=False):
-        st.json(result.structured)
-        if result.state.timings_ms:
-            st.caption("구간 소요(ms)")
-            st.json(result.state.timings_ms)
-        st.text_area("실행 로그 (최근)", value="\n".join(result.state.logs[-40:]), height=180)
-
-    result_md = result.markdown
-    parts = _split_numbered_sections(result_md)
-
-    ppt_path = result.state.artifacts.get("project_plan.pptx")
-    slide_json_path = result.state.artifacts.get("slide_plan.json")
-    business_plan_path = result.state.artifacts.get("business_plan.json")
-    content_coverage_path = result.state.artifacts.get("content_coverage_report.json")
-    n_slides = _slide_count_from_json(slide_json_path)
-    visual_assets_path = result.state.artifacts.get("visual_assets.json")
-
-    def _visual_asset_rows_from_file(path_str: str | None) -> list[dict]:
-        if not path_str:
-            return []
-        p = Path(path_str)
-        if not p.is_file():
-            return []
-        try:
-            data = json.loads(p.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            return []
-        rows_va: list[dict] = []
-        for s in data.get("slides") or []:
-            if not isinstance(s, dict):
-                continue
-            for a in s.get("assets") or []:
-                if not isinstance(a, dict):
-                    continue
-                rows_va.append(
-                    {
-                        "slide_no": s.get("slide_no"),
-                        "title": s.get("title"),
-                        "visual_type": s.get("visual_type") or a.get("visual_type"),
-                        "render_mode": a.get("render_mode") or s.get("render_mode"),
-                        "asset_path": a.get("path") or "",
-                    }
-                )
-        return rows_va
-
-    # 사용자 요청 순서: PPT → 디버그(JSON·Coverage) → Slide Plan → Visual Asset → Evaluation → (기존 탭) → Raw
-    t_ppt, t_bp, t_slide, t_cov, t_vap, t_eval, t_doc, t_wbs, t_budget, t_risk, t_critic, t_raw = st.tabs(
-        [
-            "PPT Download",
-            "Business Plan JSON",
-            "Slide Plan",
-            "Content Coverage",
-            "Visual Asset Plan",
-            "Evaluation Report",
-            "추진계획서 Markdown",
-            "WBS",
-            "예산/ROI",
-            "리스크",
-            "Critic Review",
-            "Raw JSON",
-        ]
-    )
-
-    with t_ppt:
-        st.markdown("##### 생성된 추진계획서 PPT")
-        st.caption(f"파일: **project_plan.pptx** · 슬라이드 수: **{n_slides or '—'}**")
-        if ppt_path and Path(ppt_path).is_file():
-            with open(ppt_path, "rb") as fp:
-                st.download_button(
-                    label="📥 추진계획서 PPT 다운로드",
-                    data=fp,
-                    file_name="project_plan.pptx",
-                    mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
-                )
-        else:
-            st.warning("PPT 경로를 찾지 못했습니다. `outputs/project_plan.pptx` 를 확인하세요.")
-
-    with t_bp:
-        st.markdown("##### Business Plan JSON (`outputs/business_plan.json`)")
-        st.caption("Agent·fallback Markdown이 통합된 구조 — slide_plan·PPT의 단일 소스입니다.")
-        if business_plan_path and Path(business_plan_path).is_file():
-            st.code(Path(business_plan_path).read_text(encoding="utf-8"), language="json")
-        else:
-            st.info("business_plan.json 이 없습니다. Generate 실행 후 `outputs/` 를 확인하세요.")
-
-    with t_slide:
-        if slide_json_path and Path(slide_json_path).is_file():
-            st.code(Path(slide_json_path).read_text(encoding="utf-8"), language="json")
-        else:
-            st.info("slide_plan.json 이 없습니다.")
-        if parts.get(12):
-            st.markdown("---")
-            st.markdown(parts[12])
-
-    with t_cov:
-        st.markdown("##### Content Coverage Report (`outputs/content_coverage_report.json`)")
-        st.caption("슬라이드 수·본문 채움·표/카드형 슬라이드·WBS/예산/리스크 데이터 존재 여부를 집계합니다.")
-        if content_coverage_path and Path(content_coverage_path).is_file():
-            try:
-                cov = json.loads(Path(content_coverage_path).read_text(encoding="utf-8"))
-            except (OSError, json.JSONDecodeError):
-                cov = {}
-            c1, c2, c3, c4 = st.columns(4)
-            c1.metric("총 슬라이드", cov.get("total_slides", "—"))
-            c2.metric("본문 채움", cov.get("slides_with_body", "—"))
-            c3.metric("빈 content", cov.get("empty_content_slides", "—"))
-            c4.metric("검증 통과", "✓" if cov.get("passed") else "✗")
-            st.markdown("**표·카드·데이터 플래그**")
-            st.dataframe(
-                [
-                    {
-                        "항목": "표 형태 슬라이드 수",
-                        "값": cov.get("table_like_slides"),
-                    },
-                    {
-                        "항목": "카드형 visual 슬라이드 수",
-                        "값": cov.get("card_like_slides"),
-                    },
-                    {
-                        "항목": "WBS 데이터",
-                        "값": cov.get("has_wbs_data"),
-                    },
-                    {
-                        "항목": "예산 데이터",
-                        "값": cov.get("has_budget_data"),
-                    },
-                    {
-                        "항목": "리스크 데이터",
-                        "값": cov.get("has_risk_data"),
-                    },
-                    {
-                        "항목": "AS-IS·TO-BE steps 충족",
-                        "값": cov.get("has_process_steps"),
-                    },
-                ],
-                hide_index=True,
-                use_container_width=True,
-            )
-            if cov.get("errors"):
-                with st.expander("검증 오류 목록"):
-                    for e in cov["errors"][:50]:
-                        st.caption(str(e))
-            with st.expander("원문 JSON"):
-                st.code(Path(content_coverage_path).read_text(encoding="utf-8"), language="json")
-        else:
-            st.info("content_coverage_report.json 이 없습니다. Generate 실행 후 확인하세요.")
-
-    with t_vap:
-        rows_v = _visual_asset_rows_from_file(visual_assets_path)
-        if rows_v:
-            st.dataframe(rows_v, hide_index=True, use_container_width=True)
-        else:
-            st.caption("visual_assets.json 이 없거나 비어 있습니다. Fallback 실행 후에도 manifest는 생성될 수 있습니다.")
-        if visual_assets_path and Path(visual_assets_path).is_file():
-            with st.expander("visual_assets.json 원문"):
-                st.code(Path(visual_assets_path).read_text(encoding="utf-8"), language="json")
-
-    with t_eval:
-        st.markdown("##### AutoPM Quality Harness")
-        harness = result.structured.get("harness") or result.state.artifacts.get("evaluation_report") or {}
-        if not harness:
-            st.info("아직 Harness 리포트가 없습니다. Generate 실행 후 확인하세요.")
-        else:
-            overall = harness.get("overall_score", "—")
-            passed = harness.get("final_passed", False)
-            loops = harness.get("improvement_attempts", 0)
-            max_loops = harness.get("max_improvement_attempts", 3)
-            failed_criteria = harness.get("failed_criteria") or []
-            st.metric("Overall Score", f"{overall} / 100")
-            st.caption(f"Status: **{'PASS' if passed else 'FAIL'}** · Improvement Loops: **{loops}** / {max_loops}")
-            if failed_criteria:
-                st.caption(f"Failed criteria (sample): **{len(failed_criteria)}**")
-            st.markdown("**Agent별 점수**")
-            scores = harness.get("agent_scores") or {}
-            if scores:
-                st.dataframe(
-                    [{"Agent": k, "Score": v} for k, v in sorted(scores.items())],
-                    hide_index=True,
-                    use_container_width=True,
-                )
-            else:
-                st.caption("Agent 점수 없음 (평가 스킵 또는 오류)")
-            with st.expander("실패한 기준·경고·권고"):
-                st.json(
-                    {
-                        "failed_criteria": failed_criteria,
-                        "warnings": harness.get("warnings"),
-                        "recommendations": harness.get("recommendations"),
-                        "feedback_target": harness.get("feedback_target"),
-                    }
-                )
-            er_json = result.state.artifacts.get("evaluation_report.json")
-            er_md = result.state.artifacts.get("evaluation_report.md")
-            if er_json and Path(er_json).is_file():
-                st.caption(f"`evaluation_report.json` — `{er_json}`")
-            if er_md and Path(er_md).is_file():
-                with st.expander("evaluation_report.md"):
-                    st.code(Path(er_md).read_text(encoding="utf-8"), language="markdown")
-
-    with t_doc:
-        block = _join_sections(parts, 1, 6)
-        if parts.get(0):
-            st.markdown(parts[0])
-        st.markdown(block or "_섹션을 찾지 못했습니다._")
-
-    with t_wbs:
-        st.markdown(parts.get(7, "_§7 WBS 없음_"))
-
-    with t_budget:
-        st.markdown(_join_sections(parts, 8, 9) or "_§8~9 예산/KPI 없음_")
-
-    with t_risk:
-        st.markdown(parts.get(10, "_§10 리스크 없음_"))
-
-    with t_critic:
-        st.markdown(parts.get(11, "_§11 Critic 없음_"))
-
-    with t_raw:
-        st.code(result_md, language="markdown")
-        with st.expander("섹션 헤더 목록 JSON"):
-            st.code(_outline_json(result_md), language="json")
-        st.json(result.structured)
-        if result.state.artifacts:
-            st.caption("저장된 산출물:")
-            for k, v in result.state.artifacts.items():
-                st.caption(f"- **{k}**: `{v}`")
+if st.session_state.run_mode == "Guided":
+    with tab_interview:
+        _render_guided_panel()
