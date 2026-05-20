@@ -37,6 +37,7 @@ from autopm.ui.agent_progress import (  # noqa: E402
 )
 from autopm.ui.compact_tabs import inject_compact_css, render_progress_tab  # noqa: E402
 from autopm.ui.interview_panel import render_interview_tab  # noqa: E402
+from autopm.ui.workflow_view import render_agent_workflow_tab  # noqa: E402
 from autopm.ui.results_panel import render_results_tab  # noqa: E402
 
 load_dotenv()
@@ -170,7 +171,8 @@ with st.sidebar:
         "**인터뷰 사용법**\n"
         "1. 주제 입력 → **인터뷰 시작**\n"
         "2. 파란 질문 박스 확인\n"
-        "3. 하단 입력창에 답하고 **Enter**"
+        "3. 하단 입력창에 답하고 **Enter**\n"
+        "4. **Agent 워크플로** 탭에서 전체 Agent 구조 확인"
     )
     with st.expander("5-Layer Architecture", expanded=False):
         st.markdown(_LAYERS_KR)
@@ -206,8 +208,8 @@ with st.sidebar:
             st.session_state.pop(_wk, None)
         st.rerun()
 
-tab_interview, tab_progress, tab_results = st.tabs(
-    ["💬 인터뷰·프로세스", "📊 수집·진행", "📁 산출물"],
+tab_interview, tab_progress, tab_workflow, tab_results = st.tabs(
+    ["💬 인터뷰·프로세스", "📊 수집·진행", "🔄 Agent 워크플로", "📁 산출물"],
 )
 
 with tab_interview:
@@ -224,6 +226,12 @@ with tab_progress:
         st.session_state.agent_steps,
         st.session_state.last_result,
         st.session_state.ppt_gen,
+    )
+
+with tab_workflow:
+    render_agent_workflow_tab(
+        st.session_state.agent_steps,
+        st.session_state.last_result,
     )
 
 with tab_results:
