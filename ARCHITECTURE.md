@@ -39,7 +39,7 @@ User Input (Streamlit)
   → Interview (Rule-based) — Harness: 입력 충분성
   → Draft (mock/OpenAI) — Harness: 초안 길이·구조
   → Gateway (rate limit / auth 스텁)
-  → AutoPMFlow: 8 Core PM Agents (Deep Agents + Sub-Agent 팀, 순차)
+  → AutoPMFlow: 8 Core PM Agents (Orchestrator–Worker Send + Sub-Agent 팀)
   → Evaluation Harness — 코어 산출 루브릭 + Improvement Loop (최대 3회)
   → Critic Agent (점수 / FEEDBACK_TARGET) + Self-Correction (최대 3회, 80점 Gate)
   → Documentation Agent → Markdown §1~11

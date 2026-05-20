@@ -549,7 +549,7 @@ class AutoPMFlow:
                             **_struct(),
                             "loop": state.structured_loop_summary(),
                             "artifacts": dict(state.artifacts),
-                            "harness": state.artifacts.get("evaluation_report", {}),
+                            "harness": state.harness_report(),
                             "autopm_state": state.model_dump(),
                             "ppt_generation_state": pg.to_dict(),
                         },
@@ -646,7 +646,7 @@ class AutoPMFlow:
                 "mode": "deep_demo" if demo_mode else "deep_llm",
                 "loop": state.structured_loop_summary(),
                 "artifacts": dict(state.artifacts),
-                "harness": state.artifacts.get("evaluation_report", {}),
+                "harness": state.harness_report(),
                 "ppt_generation_state": pg.to_dict(),
             }
             return AutoPMRunResult(markdown=state.document_output, structured=structured, state=state)
@@ -672,7 +672,7 @@ class AutoPMFlow:
                     "error": str(exc),
                     "loop": state.structured_loop_summary(),
                     "artifacts": dict(state.artifacts),
-                    "harness": state.artifacts.get("evaluation_report", {}),
+                    "harness": state.harness_report(),
                     "ppt_generation_state": pg.to_dict(),
                 },
                 state=state,
@@ -701,7 +701,7 @@ class AutoPMFlow:
                 "rate_limited": True,
                 "loop": state.structured_loop_summary(),
                 "artifacts": dict(state.artifacts),
-                "harness": state.artifacts.get("evaluation_report", {}),
+                "harness": state.harness_report(),
             },
             state=state,
         )
@@ -1033,7 +1033,7 @@ class AutoPMFlow:
                 max_improvement_attempts=3,
             )
             rep = combined.to_serializable()
-            state.artifacts["evaluation_report"] = rep
+            state.evaluation_report = rep
             ev_paths = export_evaluation_reports(outp, rep)
             state.artifacts.update(ev_paths)
             if ppt_gen is not None:
@@ -1060,7 +1060,7 @@ class AutoPMFlow:
                 "warnings": [f"평가 예외: {exc}"],
                 "recommendations": ["리포트를 수동 검토하세요."],
             }
-            state.artifacts["evaluation_report"] = rep
+            state.evaluation_report = rep
             try:
                 state.artifacts.update(export_evaluation_reports(outp, rep))
             except OSError:

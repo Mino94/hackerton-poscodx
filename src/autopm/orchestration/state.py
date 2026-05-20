@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class DialogueTurn(BaseModel):
@@ -104,10 +104,35 @@ class AutoPMState(BaseModel):
 
     # Harness가 파이프라인 중간 결과를 들고 최종 PPT 직전까지 이어 붙인다 — Pydantic 스키마에 두어 체크포인트에 포함된다.
     evaluation_harness_snapshot: dict[str, Any] = Field(default_factory=dict)
+    # Evaluation Harness 최종 리포트 본문 — artifacts는 파일 경로(str)만 허용한다.
+    evaluation_report: dict[str, Any] = Field(default_factory=dict)
 
     logs: list[str] = Field(default_factory=list)
     errors: list[str] = Field(default_factory=list)
     artifacts: dict[str, str] = Field(default_factory=dict)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _migrate_evaluation_report_from_artifacts(cls, data: Any) -> Any:
+        """구버전: artifacts['evaluation_report']에 dict를 넣던 경우를 필드로 이전한다."""
+        if not isinstance(data, dict):
+            return data
+        arts = data.get("artifacts")
+        if not isinstance(arts, dict):
+            return data
+        legacy = arts.get("evaluation_report")
+        if isinstance(legacy, dict) and not data.get("evaluation_report"):
+            data["evaluation_report"] = legacy
+        if "evaluation_report" in arts:
+            arts = {k: v for k, v in arts.items() if k != "evaluation_report" and isinstance(v, str)}
+            data["artifacts"] = arts
+        return data
+
+    def harness_report(self) -> dict[str, Any]:
+        """UI·structured['harness']용 — evaluation_report 우선."""
+        if self.evaluation_report:
+            return self.evaluation_report
+        return {}
     timings_ms: dict[str, float] = Field(default_factory=dict)
 
     def append_agent_dialogue(self, thread: dict[str, Any] | AgentDialogueThread) -> None:

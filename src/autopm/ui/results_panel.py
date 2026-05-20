@@ -170,7 +170,7 @@ def _render_coverage(content_coverage_path: str | None) -> None:
 
 
 def _render_harness(result: Any) -> None:
-    harness = result.structured.get("harness") or result.state.artifacts.get("evaluation_report") or {}
+    harness = result.structured.get("harness") or result.state.harness_report()
     if not harness:
         st.caption("Evaluation harness 없음")
         return
