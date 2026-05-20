@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from collections.abc import Callable
 from typing import Any
 
@@ -89,6 +90,136 @@ def _enrich_with_prior(state: AutoPMState, enriched: dict[str, str], idx: int) -
     return ctx
 
 
+def execute_pipeline_step(
+    state: AutoPMState,
+    idx: int,
+    agent_defs: dict[str, Any],
+    task_defs: dict[str, Any],
+    enriched: dict[str, str],
+    feedback_acc: str,
+    *,
+    on_progress: Callable[[str], None] | None = None,
+) -> str:
+    """
+    Core 파이프라인 1단계 실행 — Orchestrator–Worker 그래프·레거시 for-loop 공통.
+    갱신된 feedback_acc 문자열을 반환한다.
+    """
+    task_key = PIPELINE_KEYS[idx]
+    ag_key = PIPELINE_AGENT_KEYS[idx]
+    field = STATE_FIELDS[idx]
+    user_line = PIPELINE_USER_MSG[idx]
+    spec = task_defs[task_key]
+
+    ctx = _enrich_with_prior(state, enriched, idx)
+    if feedback_acc.strip():
+        ctx["feedback_block"] = feedback_acc
+
+    dialogue_snip = format_dialogue_for_prompt(state.agent_dialogue, limit=3)
+    supervisor_agent_start(state, task_key=task_key)
+
+    if on_progress:
+        on_progress(f"{user_line} → Worker 실행 (Send)… Deep Agent + Sub-Agent")
+
+    def _sub_progress(msg: str) -> None:
+        if on_progress:
+            on_progress(f"{user_line} {msg}")
+
+    out, sub_recs = run_agent_task_with_subagents(
+        ag_key,
+        agent_defs,
+        task_defs,
+        task_key,
+        ctx,
+        prior_dialogue=dialogue_snip,
+        on_progress=_sub_progress,
+    )
+    out = _as_text(out)
+    setattr(state, field, out)
+    state.agent_outputs[task_key] = out
+    if sub_recs:
+        state.subagent_outputs[task_key] = sub_recs
+    agent_done(state, ag_key, f"deep_{task_key}")
+
+    dialogue_rounds = 0
+    new_feedback = feedback_acc
+
+    if idx < len(PIPELINE_KEYS) - 1:
+        next_ag = PIPELINE_AGENT_KEYS[idx + 1]
+        next_spec = agent_defs[next_ag]
+        cur_spec = agent_defs[spec["agent"]]
+        if on_progress:
+            on_progress(f"{user_line} Agent 대화 ({dialogue_rounds_limit()}라운드)…")
+
+        thread = run_multi_turn_peer_dialogue(
+            from_agent_key=ag_key,
+            to_agent_key=next_ag,
+            from_role=cur_spec["role"],
+            to_role=next_spec["role"],
+            producer_output=out,
+            task_key=task_key,
+            enriched=ctx,
+            agent_defs=agent_defs,
+        )
+
+        if dialogue_revise_enabled() and thread.get("revision_hint"):
+            revised, rev_prov = revise_output_after_dialogue(
+                from_agent_key=ag_key,
+                task_key=task_key,
+                task_defs=task_defs,
+                agent_defs=agent_defs,
+                original_output=out,
+                dialogue_thread=thread,
+                enriched=ctx,
+            )
+            if revised and revised != out:
+                out = _as_text(revised)
+                setattr(state, field, out)
+                state.agent_outputs[task_key] = out
+                thread["revised_after_dialogue"] = True
+                thread["revise_provider"] = rev_prov
+                if on_progress:
+                    on_progress(f"{user_line} 대화 반영 산출 보완 ({rev_prov})")
+
+        state.append_agent_dialogue(thread)
+        dialogue_rounds = int(thread.get("round_count") or 0)
+        supervisor_record_dialogue(state, task_key, dialogue_rounds)
+
+        if thread.get("revision_hint"):
+            new_feedback = (
+                f"{new_feedback}\n\n### {cur_spec['role']}↔{next_spec['role']} "
+                f"({thread.get('round_count', 0)}라운드)\n{thread['revision_hint']}"
+            ).strip()
+
+    supervisor_agent_complete(
+        state,
+        task_key=task_key,
+        output=out,
+        subagent_count=len(sub_recs),
+        dialogue_rounds=dialogue_rounds,
+    )
+    run_supervisor_checkpoint(
+        state,
+        label=f"after_{task_key}",
+        enriched=enriched,
+        agent_defs=agent_defs,
+        task_key=task_key,
+    )
+
+    if on_progress:
+        on_progress(f"{user_line} → Worker 완료 ({ag_key})")
+
+    return new_feedback
+
+
+def _use_send_graph() -> bool:
+    return os.getenv("AUTOPM_USE_SEND_GRAPH", "true").strip().lower() not in (
+        "0",
+        "false",
+        "no",
+        "off",
+    )
+
+
 def run_deep_pipeline(
     state: AutoPMState,
     agent_defs: dict[str, Any],
@@ -96,112 +227,24 @@ def run_deep_pipeline(
     enriched: dict[str, str],
     on_progress: Callable[[str], None] | None,
 ) -> None:
-    """8 Core PM Agent 순차 실행 — 각 단계 후 다음 Agent가 피어 리뷰 대화를 남긴다."""
+    """8 Core PM — 기본은 LangGraph Orchestrator–Worker(Send), 레거시는 for-loop."""
+    if _use_send_graph():
+        from autopm.orchestration.orchestrator_worker_graph import run_deep_pipeline_graph
+
+        run_deep_pipeline_graph(state, agent_defs, task_defs, enriched, on_progress)
+        return
+
     feedback_acc = enriched.get("feedback_block", "")
-
-    for idx, task_key in enumerate(PIPELINE_KEYS):
-        ag_key = PIPELINE_AGENT_KEYS[idx]
-        field = STATE_FIELDS[idx]
-        user_line = PIPELINE_USER_MSG[idx]
-        spec = task_defs[task_key]
-
-        ctx = _enrich_with_prior(state, enriched, idx)
-        if feedback_acc.strip():
-            ctx["feedback_block"] = feedback_acc
-
-        dialogue_snip = format_dialogue_for_prompt(state.agent_dialogue, limit=3)
-        supervisor_agent_start(state, task_key=task_key)
-
-        if on_progress:
-            on_progress(f"{user_line} → 실행 중… (Deep Agent + Sub-Agent)")
-
-        def _sub_progress(msg: str) -> None:
-            if on_progress:
-                on_progress(f"{user_line} {msg}")
-
-        out, sub_recs = run_agent_task_with_subagents(
-            ag_key,
+    for idx in range(len(PIPELINE_KEYS)):
+        feedback_acc = execute_pipeline_step(
+            state,
+            idx,
             agent_defs,
             task_defs,
-            task_key,
-            ctx,
-            prior_dialogue=dialogue_snip,
-            on_progress=_sub_progress,
+            enriched,
+            feedback_acc,
+            on_progress=on_progress,
         )
-        out = _as_text(out)
-        setattr(state, field, out)
-        state.agent_outputs[task_key] = out
-        if sub_recs:
-            state.subagent_outputs[task_key] = sub_recs
-        agent_done(state, ag_key, f"deep_{task_key}")
-
-        dialogue_rounds = 0
-
-        # 다회차 Agent 대화 → (선택) Producer 산출 즉시 보완 — 마지막 단계 제외
-        if idx < len(PIPELINE_KEYS) - 1:
-            next_ag = PIPELINE_AGENT_KEYS[idx + 1]
-            next_spec = agent_defs[next_ag]
-            cur_spec = agent_defs[spec["agent"]]
-            if on_progress:
-                on_progress(f"{user_line} Agent 대화 ({dialogue_rounds_limit()}라운드)…")
-
-            thread = run_multi_turn_peer_dialogue(
-                from_agent_key=ag_key,
-                to_agent_key=next_ag,
-                from_role=cur_spec["role"],
-                to_role=next_spec["role"],
-                producer_output=out,
-                task_key=task_key,
-                enriched=ctx,
-                agent_defs=agent_defs,
-            )
-
-            if dialogue_revise_enabled() and thread.get("revision_hint"):
-                revised, rev_prov = revise_output_after_dialogue(
-                    from_agent_key=ag_key,
-                    task_key=task_key,
-                    task_defs=task_defs,
-                    agent_defs=agent_defs,
-                    original_output=out,
-                    dialogue_thread=thread,
-                    enriched=ctx,
-                )
-                if revised and revised != out:
-                    out = _as_text(revised)
-                    setattr(state, field, out)
-                    state.agent_outputs[task_key] = out
-                    thread["revised_after_dialogue"] = True
-                    thread["revise_provider"] = rev_prov
-                    if on_progress:
-                        on_progress(f"{user_line} 대화 반영 산출 보완 ({rev_prov})")
-
-            state.append_agent_dialogue(thread)
-            dialogue_rounds = int(thread.get("round_count") or 0)
-            supervisor_record_dialogue(state, task_key, dialogue_rounds)
-
-            if thread.get("revision_hint"):
-                feedback_acc = (
-                    f"{feedback_acc}\n\n### {cur_spec['role']}↔{next_spec['role']} "
-                    f"({thread.get('round_count', 0)}라운드)\n{thread['revision_hint']}"
-                ).strip()
-
-        supervisor_agent_complete(
-            state,
-            task_key=task_key,
-            output=out,
-            subagent_count=len(sub_recs),
-            dialogue_rounds=dialogue_rounds,
-        )
-        run_supervisor_checkpoint(
-            state,
-            label=f"after_{task_key}",
-            enriched=enriched,
-            agent_defs=agent_defs,
-            task_key=task_key,
-        )
-
-        if on_progress:
-            on_progress(f"{user_line} → 완료 ({ag_key})")
 
 
 def run_deep_single_task(
@@ -343,6 +386,7 @@ __all__ = [
     "PIPELINE_KEYS",
     "STATE_FIELDS",
     "PIPELINE_USER_MSG",
+    "execute_pipeline_step",
     "run_deep_pipeline",
     "run_deep_single_task",
     "run_deep_critic",

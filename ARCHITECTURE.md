@@ -17,6 +17,21 @@
 
 환경 변수: `OPEN_SOURCE_LLM_PROVIDER=ollama`, `AUTOPM_USE_LOCAL_LLM=true`, `AUTOPM_ENABLE_SUBAGENTS=true`(기본).
 
+## Orchestrator–Worker (LangGraph `Send`)
+
+8 Core PM 파이프라인은 **`orchestrator_worker_graph.py`** 에서 LangGraph로 실행한다.
+
+```text
+START → orchestrator → conditional_edges(dispatch_workers)
+         ↓ Send(worker, { idx, autopm_state, … })  × 8단계 동적 생성
+       worker → execute_pipeline_step() → orchestrator → … → END
+```
+
+- **Orchestrator**: `current_idx`를 보고 다음 Worker에 `Send()` 디스패치, Supervisor 체크포인트
+- **Worker**: Parent Agent + Sub-Agent + 피어 대화 1단계 처리 후 `current_idx += 1`
+- 공통 로직: `deep_pipeline.execute_pipeline_step()` (그래프·레거시 for-loop 공유)
+- 끄기: `AUTOPM_USE_SEND_GRAPH=false` → 기존 for-loop
+
 ## 전체 워크플로
 
 ```text

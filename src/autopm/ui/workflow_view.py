@@ -81,6 +81,13 @@ flowchart TB
         SV["진행·산출·체크포인트 관리"]
     end
 
+    subgraph OW["Orchestrator–Worker (LangGraph Send)"]
+        ORCH["Orchestrator dispatch"]
+        WRK["Worker × N 동적 생성"]
+        ORCH -->|Send task| WRK
+        WRK --> ORCH
+    end
+
     subgraph CORE["② Core PM Agents"]
         direction TB
         O["PM Orchestrator"] --> R["Requirement Interview"]
@@ -106,7 +113,8 @@ flowchart TB
     OUT["project_plan.pptx"]
 
     INP --> SV
-    SV --> O
+    SV --> ORCH
+    WRK --> O
     RK --> CR
     CR --> DOC
     DOC --> ST
@@ -126,14 +134,12 @@ def render_agent_workflow_tab(
     """Agent Workflow 탭 — 구조도 + 단계표 + Sub-Agent + (선택) 실시간 상태."""
     st.markdown("#### AutoPM Agent Workflow")
     st.caption(
-        "인터뷰 → **Supervisor PM**이 전 Agent를 관리 → Core 8 → Critic·문서화 → "
-        "PPT 4단계. 인접 Agent 사이에는 **다회차 대화**(검토→응답→합의)가 있습니다."
+        "인터뷰 → **Supervisor PM** → **LangGraph Orchestrator–Worker**(`Send()`로 단계별 Worker 동적 생성) → "
+        "Core 8 → Critic·문서화 → PPT 4단계. `AUTOPM_USE_SEND_GRAPH=false` 이면 레거시 for-loop."
     )
 
-    try:
-        st.mermaid(_mermaid_workflow())
-    except Exception:
-        st.info("구조도: 인터뷰 → Supervisor → Core 8 → Critic/문서 → Storyline → Vis → Graphics → Composer → PPTX")
+    with st.expander("구조도 (Mermaid — GitHub/Notion에 붙여넣기)", expanded=False):
+        st.code(_mermaid_workflow().strip(), language="mermaid")
 
     supervisor = None
     steps_map: dict[str, str] = {}
