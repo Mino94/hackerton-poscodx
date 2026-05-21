@@ -17,6 +17,24 @@
 
 환경 변수: `OPEN_SOURCE_LLM_PROVIDER=ollama`, `AUTOPM_USE_LOCAL_LLM=true`, `AUTOPM_ENABLE_SUBAGENTS=true`(기본).
 
+## MCP (Model Context Protocol)
+
+PM Agent가 **구조화된 도구**를 호출해 RAG·비용 추정·Mermaid·slide_plan을 참고한다.
+
+| 구성 | 경로 | 역할 |
+| --- | --- | --- |
+| MCP Server | `python -m autopm.mcp` (stdio) | Cursor·외부 클라이언트용 |
+| Tool Registry | `src/autopm/mcp/registry.py` | in-process·서버 공용 핸들러 |
+| Agent Policy | `config/mcp_agent_tools.yaml` | Agent/Task별 도구 매핑 |
+| Integration | `mcp/integration.py` | `invoke_for_agent()` prefetch + 선택 ReAct |
+
+**실행 모드**
+
+1. **Prefetch (기본, `AUTOPM_ENABLE_MCP=true`)** — Agent 호출 전 in-process로 도구 실행 → 프롬프트에 결과 블록 삽입 (`deep_runner`, `subagent_runner`)
+2. **ReAct (`AUTOPM_MCP_REACT=true`)** — OpenAI `bind_tools` + `langchain-mcp-adapters` stdio 클라이언트로 LLM이 도구 직접 호출
+
+도구: `rag_search`, `estimate_cost`, `fp_estimate`, `mermaid_process`, `gantt_outline`, `normalize_input`, `read_slide_plan`
+
 ## Orchestrator–Worker (LangGraph `Send`)
 
 8 Core PM 파이프라인은 **`orchestrator_worker_graph.py`** 에서 LangGraph로 실행한다.
@@ -47,7 +65,9 @@ User Input (Streamlit)
   → Visualization → Evaluation Harness (시각 유형)
   → **Presentation Graphics** → PPT Composer (JSON SlideDeckSpec)
   → enrich_graphics_pipeline (PNG / graphics_spec 보강) → `outputs/visual_assets.json` + `outputs/assets/`
+  → OpenAI 슬라이드 JSON 고도화 (`ppt_openai_enhancer`, `AUTOPM_OPENAI_ENHANCE_PPT`)
   → python-pptx Composer → outputs/project_plan.pptx
+  → Gamma API (선택) → outputs/project_plan_gamma.pptx
   → Final Evaluation Harness → `outputs/evaluation_report.json` + `.md`
   → slide_plan.json + CSV/Markdown export
 ```

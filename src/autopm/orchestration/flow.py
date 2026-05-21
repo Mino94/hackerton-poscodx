@@ -935,6 +935,17 @@ class AutoPMFlow:
                 state.errors.append(f"ppt_crew: {exc}")
 
         deck_dict = ensure_valid_deck(deck_dict, business_plan)
+
+        # OpenAI API로 슬라이드 JSON·스토리라인 고도화 — python-pptx 품질 향상
+        try:
+            from autopm.services.ppt_quality_router import apply_openai_ppt_enhancements
+
+            deck_dict = apply_openai_ppt_enhancements(
+                state, deck_dict, inp_combined, markdown_before_slides
+            )
+        except Exception as exc:  # noqa: BLE001
+            state.errors.append(f"openai_ppt_enhance: {exc}")
+
         ok_cov, _cov_errs, cov_report = validate_slide_deck_content(deck_dict)
         cov_report["validation_passed"] = ok_cov
         try:
@@ -966,6 +977,26 @@ class AutoPMFlow:
             state.artifacts["project_plan.pptx"] = pptx_path
         except Exception as exc:  # noqa: BLE001
             state.errors.append(f"pptx: {exc}")
+
+        # Gamma API — 고품질 PPTX(선택). 실패해도 기본 project_plan.pptx 유지
+        try:
+            from autopm.services.ppt_quality_router import try_export_gamma_ppt
+
+            gamma_paths = try_export_gamma_ppt(
+                outp,
+                project_title=title,
+                markdown=markdown_before_slides,
+                deck_dict=deck.model_dump(),
+                context=inp_combined,
+                on_progress=on_progress,
+            )
+            if gamma_paths:
+                for k, v in gamma_paths.items():
+                    if v and isinstance(v, str):
+                        state.artifacts[k] = v
+        except Exception as exc:  # noqa: BLE001
+            state.errors.append(f"gamma_ppt: {exc}")
+
         full_md = append_ppt_slide_section(markdown_before_slides, deck)
         state.document_output = full_md
         export_run_artifacts(state, full_md)

@@ -1,0 +1,61 @@
+# Agent·Task별 MCP 도구 — prefetch 시 in-process, ReAct 시 LLM이 선택 호출
+default:
+  - rag_search
+
+pm_orchestrator_agent:
+  - rag_search
+  - estimate_cost
+
+requirement_interview_agent:
+  - rag_search
+  - normalize_input
+  - estimate_cost
+
+business_analyst_agent:
+  - rag_search
+  - mermaid_process
+
+solution_architect_agent:
+  - mermaid_process
+  - rag_search
+
+development_scope_agent:
+  - fp_estimate
+  - rag_search
+
+wbs_planner_agent:
+  - gantt_outline
+  - mermaid_process
+
+budget_roi_agent:
+  - estimate_cost
+  - fp_estimate
+
+risk_critic_agent:
+  - rag_search
+
+storyline_slide_planning_agent:
+  - read_slide_plan
+  - rag_search
+
+visualization_agent:
+  - mermaid_process
+  - read_slide_plan
+
+presentation_graphics_agent:
+  - read_slide_plan
+
+ppt_composer_agent:
+  - read_slide_plan
+
+# tasks.yaml task_key 오버라이드(선택)
+task_overrides:
+  wbs_task:
+    - gantt_outline
+    - mermaid_process
+  budget_roi_task:
+    - estimate_cost
+    - fp_estimate
+  business_analysis_task:
+    - rag_search
+    - mermaid_process

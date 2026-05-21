@@ -6,7 +6,12 @@ import re
 
 from autopm.chat.interview_state import InterviewState
 from autopm.chat.proposal_extract import extract_title_metadata
-from autopm.chat.question_rules import FIELD_QUESTIONS
+from autopm.chat.question_rules import (
+    FIELD_DEMO_SAMPLES,
+    FIELD_QUESTIONS,
+    FIELD_SKIP_DEFAULTS,
+    demo_sample_for_field,
+)
 
 
 def extract_from_initial_text(text: str) -> dict[str, object]:
@@ -134,3 +139,29 @@ class InterviewBot:
 
     def mark_completed(self) -> None:
         self.state.completed = True
+
+    def apply_demo_sample_for_current(self) -> str:
+        """현재 질문에 ERP 데모 샘플 답변을 넣고 다음 질문으로 진행한다."""
+        field = self.state.current_field()
+        if not field:
+            return self._next_question_text()
+        sample = demo_sample_for_field(field)
+        if not sample:
+            return self.apply_chat_answer(FIELD_SKIP_DEFAULTS.get(field, "가정"))
+        return self.apply_chat_answer(sample)
+
+    def fill_all_remaining_demo_samples(self) -> int:
+        """
+        남은 질문을 순서대로 데모 샘플로 채운다.
+        반환: 채운 필드 개수 — UI에서 안내 문구에 사용한다.
+        """
+        filled = 0
+        for _ in range(24):
+            missing = self.state.get_missing_fields()
+            if not missing:
+                break
+            field = missing[0]
+            sample = FIELD_DEMO_SAMPLES.get(field) or FIELD_SKIP_DEFAULTS.get(field, "가정")
+            self.apply_chat_answer(str(sample))
+            filled += 1
+        return filled

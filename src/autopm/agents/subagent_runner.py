@@ -6,7 +6,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
-from autopm.services.llm_router import _coerce_llm_text, invoke_with_tier, merge_subagent_fallbacks
+from autopm.mcp.integration import invoke_for_agent
+from autopm.services.llm_router import _coerce_llm_text, merge_subagent_fallbacks
 from autopm.services.prompt_manager import (
     build_agent_system_prompt,
     build_subagent_system_prompt,
@@ -59,9 +60,11 @@ def _run_one_subagent(
     system = build_subagent_system_prompt(parent_agent_key, sid, role, goal)
     user = build_subagent_user_prompt(goal, context, _prior_subagent_block(prior))
 
-    text, provider = invoke_with_tier(
+    text, provider = invoke_for_agent(
         system,
         user,
+        agent_key=parent_agent_key,
+        task_key=f"sub_{sid}",
         tier=tier,
         fallback_key=f"sub_{sid}",
         context=context,
@@ -169,9 +172,11 @@ def run_subagents_then_task(
         extra_sections=extra,
     )
 
-    polished, provider = invoke_with_tier(
+    polished, provider = invoke_for_agent(
         system,
         user,
+        agent_key=ag_key,
+        task_key=task_key,
         tier="cloud",
         fallback_key=task_key,
         context=context,

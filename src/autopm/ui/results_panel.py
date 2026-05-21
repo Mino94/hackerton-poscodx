@@ -105,18 +105,39 @@ def _render_file_subtabs(result: Any) -> None:
     )
 
     with t_ppt:
-        st.caption(f"**project_plan.pptx** · {n_slides or '—'}장")
-        if ppt_path and Path(ppt_path).is_file():
-            with open(ppt_path, "rb") as fp:
-                st.download_button(
-                    label="📥 PPT 다운로드",
-                    data=fp,
-                    file_name="project_plan.pptx",
-                    mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
-                    use_container_width=True,
-                )
-        else:
-            st.warning("`outputs/project_plan.pptx` 없음")
+        gamma_path = artifacts.get("project_plan_gamma.pptx")
+        gamma_url = artifacts.get("gamma_url", "")
+        st.caption(
+            f"**기본 PPT** · {n_slides or '—'}장"
+            + (" · **Gamma API** 사용 가능" if gamma_path and Path(gamma_path).is_file() else "")
+        )
+        col_a, col_b = st.columns(2)
+        with col_a:
+            if ppt_path and Path(ppt_path).is_file():
+                with open(ppt_path, "rb") as fp:
+                    st.download_button(
+                        label="📥 기본 PPT (python-pptx)",
+                        data=fp,
+                        file_name="project_plan.pptx",
+                        mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                        use_container_width=True,
+                    )
+            else:
+                st.warning("`project_plan.pptx` 없음")
+        with col_b:
+            if gamma_path and Path(gamma_path).is_file():
+                with open(gamma_path, "rb") as fg:
+                    st.download_button(
+                        label="✨ Gamma PPT (고품질)",
+                        data=fg,
+                        file_name="project_plan_gamma.pptx",
+                        mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                        use_container_width=True,
+                    )
+                if gamma_url:
+                    st.caption(f"[Gamma에서 열기]({gamma_url})")
+            else:
+                st.caption("Gamma PPT: `.env`에 `GAMMA_API_KEY` 설정 시 생성")
 
     with t_doc:
         if parts.get(0):

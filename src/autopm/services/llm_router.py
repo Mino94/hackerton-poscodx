@@ -191,6 +191,16 @@ def get_llm_routing_status() -> dict[str, Any]:
     }
 
 
+def get_mcp_routing_status() -> dict[str, Any]:
+    """MCP 서버·도구 상태 — Streamlit 사이드바용."""
+    try:
+        from autopm.mcp.client import get_mcp_status
+
+        return get_mcp_status()
+    except Exception as exc:  # noqa: BLE001
+        return {"mcp_enabled": False, "error": str(exc)}
+
+
 def _content_to_text(content: Any) -> str:
     """LangChain 응답 content가 str·list·dict 혼합일 때 Markdown 문자열로 통일한다."""
     if content is None:

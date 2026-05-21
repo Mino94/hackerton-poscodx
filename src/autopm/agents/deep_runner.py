@@ -6,6 +6,7 @@ import os
 from collections.abc import Callable
 from typing import Any
 
+from autopm.mcp.integration import append_mcp_context, invoke_for_agent
 from autopm.services.llm_router import get_langchain_chat_model_or_none, invoke_chat_or_fallback
 from autopm.services.prompt_manager import (
     build_agent_system_prompt,
@@ -44,14 +45,16 @@ def run_flat_agent_task(
         prior_dialogue=prior_dialogue,
     )
 
-    model = get_langchain_chat_model_or_none()
-    return invoke_chat_or_fallback(
+    text, _provider = invoke_for_agent(
         system,
         user,
+        agent_key=ag_key,
+        task_key=task_key,
+        tier="cloud",
         fallback_key=task_key,
         context=context,
-        model=model,
     )
+    return text
 
 
 def run_agent_task(

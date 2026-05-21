@@ -126,6 +126,41 @@ FIELD_LABELS_KR: dict[str, str] = {
 # to_autopm_inputs 시 비어 있을 때 붙이는 안내 — Crew가 멈추지 않게 한다.
 ASSUMPTION_SUFFIX = " (AutoPM 가정·추후 확정 필요)"
 
+# AGENTS.md ERP 월마감 데모 — 질문마다 「샘플 넣기」·「전체 채우기」에 사용한다.
+DEMO_SCENARIO_SEED = (
+    "ERP 월마감 데이터 검증 자동화\n\n"
+    "월마감 시 ERP에서 품목 단가, 재고 수량, BOM 누락 여부를 엑셀로 다운로드하여 수작업 검증한다. "
+    "검증 시간이 오래 걸리고 담당자별 기준이 달라 오류가 누락될 수 있다."
+)
+
+FIELD_DEMO_SAMPLES: dict[str, str] = {
+    "proposal_title": "ERP 월마감 데이터 검증 자동화",
+    "proposal_purpose": "내부 개선안",
+    "background_context": (
+        "월마감 시 ERP에서 품목 단가, 재고 수량, BOM 누락 여부를 엑셀로 다운로드하여 수작업 검증한다."
+    ),
+    "current_problems": "검증 시간이 오래 걸리고 담당자별 기준이 달라 오류가 누락될 수 있다.",
+    "target_system": "ERP (품목 단가·재고·BOM)",
+    "business_scope": "월마감 데이터 검증·정합성 점검·오류 사전 탐지",
+    "improvement_direction": "검증 룰 자동화, 표준 검증 기준 적용, 월마감 검증 시간 단축",
+    "target_audience": "회계팀, 생산관리팀, IT팀",
+    "key_emphasis": "업무 효율화·검증 시간 절감·데이터 신뢰성",
+    "presentation_tone": "실무 추진계획형",
+    "timeline": "4주",
+    "budget_range": "500만 원 이하",
+    "related_departments": "회계팀, 생산관리팀, IT팀",
+    "monthly_hours": "40",
+    "people_count": "3",
+}
+
+
+def demo_sample_for_field(field: str | None) -> str:
+    """현재 질문 필드에 맞는 데모 샘플 문자열 — 없으면 빈 문자열."""
+    if not field:
+        return ""
+    return FIELD_DEMO_SAMPLES.get(field, FIELD_SKIP_DEFAULTS.get(field, ""))
+
+
 # UI 빠른 선택 버튼 — 번호 대신 라벨을 그대로 답변으로 저장한다.
 FIELD_QUICK_CHOICES: dict[str, list[str]] = {
     "proposal_purpose": [
@@ -142,6 +177,50 @@ FIELD_QUICK_CHOICES: dict[str, list[str]] = {
         "기술 아키텍처형",
         "투자/예산 승인형",
     ],
+    "background_context": [
+        "월마감 ERP 데이터를 엑셀로 받아 수작업 검증",
+        "원가·재고 데이터 정합성 이슈로 보고 지연",
+        "전략 과제 대응을 위한 시스템·프로세스 개선",
+    ],
+    "current_problems": [
+        "검증 시간 과다·담당자별 기준 상이",
+        "오류 누락·재작업 발생",
+        "실시간 모니터링·표준 룰 부재",
+    ],
+    "target_system": [
+        "ERP (원가·재고·BOM)",
+        "Mini ERP / 원가시스템",
+        "엑셀·ERP 연계 검증 도구",
+    ],
+    "business_scope": [
+        "월마감 검증 전 구간",
+        "단가·재고·BOM 검증",
+        "경영 보고용 리포트까지",
+    ],
+    "improvement_direction": [
+        "검증 자동화·룰 엔진",
+        "데이터 표준화·실시간 모니터링",
+        "AI 기반 이상 탐지(가정)",
+    ],
+    "target_audience": [
+        "경영진·재무/원가팀",
+        "IT·현업(회계·생산)",
+        "고객사·프로젝트 승인자",
+    ],
+    "key_emphasis": [
+        "업무 효율화·시간 절감",
+        "비용 절감·ROI",
+        "데이터 신뢰성·리스크 감소",
+    ],
+    "timeline": ["4주", "2개월", "2026년 상반기"],
+    "budget_range": ["500만 원 이하", "1천만 원 내", "내부 과제·별도 협의"],
+    "related_departments": [
+        "회계팀, 생산관리팀, IT팀",
+        "재무·원가·IT",
+        "현업·PMO·IT",
+    ],
+    "monthly_hours": ["40", "80", "120"],
+    "people_count": ["2", "3", "5"],
 }
 
 # 건너뛰기 시 채울 기본값

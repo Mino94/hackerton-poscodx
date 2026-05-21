@@ -7,14 +7,10 @@ from typing import Callable
 import streamlit as st
 
 from autopm.chat import InterviewBot, InterviewState
-from autopm.chat.question_rules import FIELD_QUICK_CHOICES
+from autopm.chat.question_rules import DEMO_SCENARIO_SEED, FIELD_QUICK_CHOICES, demo_sample_for_field
 
-# AGENTS.md 데모 시나리오 — 한 번에 주제·맥락을 채우기 위한 샘플
-_DEMO_SEED = (
-    "ERP 월마감 데이터 검증 자동화\n\n"
-    "월마감 시 ERP에서 품목 단가, 재고 수량, BOM 누락을 엑셀로 받아 수작업 검증합니다. "
-    "시간이 오래 걸리고 담당자별 기준이 달라 오류가 누락될 수 있습니다."
-)
+# 레거시 import 호환
+_DEMO_SEED = DEMO_SCENARIO_SEED
 
 
 def _apply_answer(get_iv: Callable[[], InterviewState], save_iv: Callable[[InterviewState], None], text: str) -> None:
@@ -28,6 +24,25 @@ def _apply_quick(get_iv: Callable[[], InterviewState], save_iv: Callable[[Interv
         st.session_state._interview_ui_warn = "먼저 **① 인터뷰 시작**을 눌러 주세요."
         return
     _apply_answer(get_iv, save_iv, choice)
+
+
+def _apply_current_sample(get_iv: Callable[[], InterviewState], save_iv: Callable[[InterviewState], None]) -> None:
+    if not st.session_state.interview_started:
+        st.session_state._interview_ui_warn = "먼저 **① 인터뷰 시작**을 눌러 주세요."
+        return
+    bot = InterviewBot(get_iv())
+    bot.apply_demo_sample_for_current()
+    save_iv(bot.state)
+
+
+def _fill_all_samples(get_iv: Callable[[], InterviewState], save_iv: Callable[[InterviewState], None]) -> None:
+    if not st.session_state.interview_started:
+        st.session_state._interview_ui_warn = "먼저 **① 인터뷰 시작**을 눌러 주세요."
+        return
+    bot = InterviewBot(get_iv())
+    n = bot.fill_all_remaining_demo_samples()
+    save_iv(bot.state)
+    st.session_state._interview_ui_info = f"데모 샘플로 **{n}개** 항목을 채웠습니다. 바로 **PPT 생성** 가능합니다."
 
 
 def _skip_field(get_iv: Callable[[], InterviewState], save_iv: Callable[[InterviewState], None]) -> None:
@@ -54,6 +69,9 @@ def render_interview_tab(
     warn = st.session_state.pop("_interview_ui_warn", None)
     if warn:
         st.warning(warn)
+    info = st.session_state.pop("_interview_ui_info", None)
+    if info:
+        st.success(info)
 
     iv = get_iv()
     filled = iv.filled_count()
@@ -114,13 +132,43 @@ def render_interview_tab(
 
     # ── ② 인터뷰 진행 중 ──
     field = iv.current_field()
+    missing_n = len(iv.get_missing_fields())
+
     with st.container(border=True):
-        st.markdown(f"#### 지금 답할 항목: **{iv.current_question_label()}**")
+        st.markdown(f"#### 지금 답할 항목: **{iv.current_question_label()}** (`{filled + 1}`/{total})")
         st.markdown(iv.current_question_body())
+
+        sample_text = demo_sample_for_field(field)
+        if sample_text:
+            st.markdown(
+                f'<p style="color:#555;font-size:0.9rem;margin:0.25rem 0;">'
+                f'<b>샘플 답변 예시:</b> {sample_text[:200]}'
+                f'{"…" if len(sample_text) > 200 else ""}</p>',
+                unsafe_allow_html=True,
+            )
+
+        btn_a, btn_b = st.columns(2)
+        with btn_a:
+            st.button(
+                "📋 이 질문 — 샘플 답변 넣기",
+                use_container_width=True,
+                help="ERP 월마감 데모 시나리오 값을 현재 질문에 바로 적용합니다.",
+                on_click=_apply_current_sample,
+                args=(get_iv, save_iv),
+            )
+        with btn_b:
+            st.button(
+                f"⚡ 남은 {missing_n}개 질문 — 샘플로 한번에 채우기",
+                use_container_width=True,
+                type="secondary",
+                help="아직 안 채운 항목을 데모 샘플로 모두 입력하고 인터뷰를 끝냅니다.",
+                on_click=_fill_all_samples,
+                args=(get_iv, save_iv),
+            )
 
         choices = FIELD_QUICK_CHOICES.get(field or "", [])
         if choices:
-            st.caption("▼ 버튼을 눌러도 되고, 직접 입력해도 됩니다.")
+            st.caption("▼ 아래 버튼 중 하나를 눌러도 되고, 입력창에 직접 써도 됩니다.")
             cols = st.columns(min(len(choices), 3))
             for i, label in enumerate(choices):
                 with cols[i % len(cols)]:

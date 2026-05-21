@@ -187,6 +187,28 @@ with st.sidebar:
             f"로컬(Ollama): {'ON' if _llm.get('local_llm_enabled') else 'OFF'} · "
             f"Sub-Agent: {'ON' if _llm.get('subagents_enabled') else 'OFF'}"
         )
+        try:
+            from autopm.services.llm_router import get_mcp_routing_status
+
+            _mcp = get_mcp_routing_status()
+            st.caption(
+                f"MCP: {'ON' if _mcp.get('mcp_enabled') else 'OFF'} · "
+                f"prefetch {len(_mcp.get('inprocess_tools') or [])} tools · "
+                f"ReAct: {'ON' if _mcp.get('mcp_react') else 'OFF'}"
+            )
+        except Exception:
+            pass
+        try:
+            from autopm.services.ppt_quality_router import get_ppt_quality_config
+
+            _pq = get_ppt_quality_config()
+            st.caption(
+                f"PPT API: `{_pq.get('ppt_api_mode')}` · "
+                f"OpenAI 슬라이드 고도화: {'ON' if _pq.get('openai_enhance_ppt') else 'OFF'} · "
+                f"Gamma: {'ON' if _pq.get('gamma_configured') else 'OFF'}"
+            )
+        except Exception:
+            pass
         if _llm.get("local_llm_enabled"):
             st.caption(f"Ollama: `{_llm.get('ollama_model')}` @ `{_llm.get('ollama_host')}`")
     except Exception:
