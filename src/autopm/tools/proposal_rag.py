@@ -40,15 +40,21 @@ def _collection_name() -> str:
 
 
 def _get_embeddings() -> Any | None:
-    """OpenAI 임베딩 — API Key 없으면 None."""
+    """OpenAI 임베딩 — API Key 없으면 None. POSCO 게이트웨이 base_url 동일 적용."""
+    from autopm.services.llm_router import get_openai_api_key, get_openai_base_url
+
     load_dotenv()
-    if not os.getenv("OPENAI_API_KEY", "").strip():
+    if not get_openai_api_key():
         return None
     try:
         from langchain_openai import OpenAIEmbeddings
 
         model = os.getenv("OPENAI_EMBEDDING_MODEL", "text-embedding-3-small").strip()
-        return OpenAIEmbeddings(model=model)
+        kwargs: dict[str, Any] = {"model": model, "api_key": get_openai_api_key()}
+        base = get_openai_base_url()
+        if base:
+            kwargs["base_url"] = base
+        return OpenAIEmbeddings(**kwargs)
     except Exception:
         return None
 

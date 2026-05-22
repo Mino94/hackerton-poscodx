@@ -384,12 +384,23 @@ class AutoPMFlow:
             enriched = self._build_enriched(inputs, pg)
             try:
                 t0_core = time.perf_counter()
+                # Guided Core는 속도 우선: API 없으면 demo, Harness 생략, Critic 1회만
+                llm = get_openai_llm_or_none()
+                demo_mode = llm is None
                 final_md = self._run_deep_core_document(
-                    state, inputs, enriched, pg, root, on_progress, demo_mode=False
+                    state,
+                    inputs,
+                    enriched,
+                    pg,
+                    root,
+                    on_progress,
+                    demo_mode=demo_mode,
+                    skip_harness=True,
+                    critic_max_loops=1,
                 )
                 record_phase_ms(state, "core_doc_phased", time.perf_counter() - t0_core)
                 save_autopm_checkpoint(root, "after_doc_phased", state)
-                mode = "deep_demo" if get_openai_llm_or_none() is None else "deep_llm"
+                mode = "deep_demo" if demo_mode else "deep_llm"
                 return AutoPMRunResult(
                     markdown=final_md,
                     structured={**_struct(), "mode": mode, "autopm_state": state.model_dump()},
@@ -779,10 +790,13 @@ class AutoPMFlow:
         on_progress: Callable[[str], None] | None,
         *,
         demo_mode: bool = False,
+        skip_harness: bool = False,
+        critic_max_loops: int | None = None,
     ) -> str:
         """
         Core 8 Agent + Critic + 문서화 — OpenAI Key 없어도 deep_runner fallback으로 동작한다.
         demo_mode=True이면 Critic 루프는 1회만 돌리고 PPT 체인까지 이어 붙인다(FULL_AUTO용).
+        skip_harness=True — Guided 단계별 실행에서 Harness 재시도 루프를 생략한다(체감 속도).
         """
         agent_defs = build_all_agent_defs()
         task_defs = load_tasks()
@@ -792,10 +806,16 @@ class AutoPMFlow:
         run_supervisor_checkpoint(
             state, label="after_core", enriched=enriched, agent_defs=agent_defs
         )
-        self._harness_after_pipeline(state, inputs, pg, agent_defs, task_defs, enriched, on_progress)
+        if skip_harness:
+            self._notify(on_progress, "[Harness] Guided — 품질 개선 루프 생략")
+        else:
+            self._harness_after_pipeline(state, inputs, pg, agent_defs, task_defs, enriched, on_progress)
 
         state.current_phase = "critic_loop"
-        max_loops = 1 if demo_mode else state.max_loops
+        if critic_max_loops is not None:
+            max_loops = critic_max_loops
+        else:
+            max_loops = 1 if demo_mode else state.max_loops
         while True:
             if on_progress:
                 on_progress(f"[Critic] 평가 중 (loop_count={state.loop_count})")

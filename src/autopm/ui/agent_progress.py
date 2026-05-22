@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import random
 import re
 import time
@@ -161,11 +162,17 @@ def simulate_agent_progress(
     delay_min: float = 0.3,
     delay_max: float = 0.7,
     render_fn: Callable[[list[AgentStep]], None],
+    fast: bool = False,
 ) -> None:
     """
     Deep Agent 호출 전 가벼운 시뮬레이션 — 각 Agent가 순차로 '실행 중' 후 다시 대기로 돌아가 웨이브만 보여준다.
     (실제 완료는 run 이후 finalize에서 처리 — 요구사항 '실행 전 simulation'.)
+    fast=True 또는 AUTOPM_SKIP_PROGRESS_SIM — Guided 등에서 6~12초 인위 지연을 줄인다.
     """
+    if os.getenv("AUTOPM_SKIP_PROGRESS_SIM", "true").strip().lower() not in ("0", "false", "no"):
+        return
+    if fast:
+        delay_min, delay_max = 0.02, 0.05
     for i, _s in enumerate(steps):
         update_agent_status(steps, i, "running")
         render_fn(steps)

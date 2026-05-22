@@ -19,7 +19,8 @@ services:
       # LLM: .env에 OPENAI_API_KEY 있으면 openai, 없으면 ollama(호스트)
       LLM: ${PRESENTON_LLM:-openai}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-http://aigpt.posco.net/gpgpta01-gpt/v1}
       OLLAMA_URL: ${OLLAMA_URL:-http://host.docker.internal:11434}
       OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5:7b}
       DISABLE_ANONYMOUS_TRACKING: "true"

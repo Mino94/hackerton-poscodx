@@ -8,18 +8,69 @@ from typing import Any
 
 from dotenv import load_dotenv
 
+# POSCO 등 OpenAI 호환 게이트웨이 — ChatOpenAI(base_url=...) 단일 설정 지점
+_DEFAULT_OPENAI_MODEL = "gpt-4o-mini"
+
+
+def get_openai_api_key() -> str:
+    load_dotenv()
+    return os.getenv("OPENAI_API_KEY", "").strip()
+
+
+def get_openai_base_url() -> str | None:
+    """OPENAI_BASE_URL 또는 OPENAI_API_BASE — 비우면 공식 OpenAI 엔드포인트."""
+    load_dotenv()
+    raw = (
+        os.getenv("OPENAI_BASE_URL", "").strip()
+        or os.getenv("OPENAI_API_BASE", "").strip()
+    )
+    return raw.rstrip("/") if raw else None
+
+
+def get_openai_model_name(default: str | None = None) -> str:
+    load_dotenv()
+    return (os.getenv("OPENAI_MODEL", "").strip() or default or _DEFAULT_OPENAI_MODEL)
+
+
+def build_openai_client() -> Any:
+    """openai 패키지 SDK 클라이언트 — refine·PPT enhance 등."""
+    from openai import OpenAI
+
+    key = get_openai_api_key()
+    if not key:
+        raise RuntimeError("OPENAI_API_KEY가 없습니다.")
+    kwargs: dict[str, str] = {"api_key": key}
+    base = get_openai_base_url()
+    if base:
+        kwargs["base_url"] = base
+    return OpenAI(**kwargs)
+
+
+def build_chat_openai(**extra: Any) -> Any:
+    """LangChain ChatOpenAI — Deep Agents·MCP ReAct·proposal_tools 공용."""
+    from langchain_openai import ChatOpenAI
+
+    key = get_openai_api_key()
+    if not key:
+        raise RuntimeError("OPENAI_API_KEY가 없습니다.")
+    kwargs: dict[str, Any] = {
+        "api_key": key,
+        "model": get_openai_model_name(),
+        "temperature": extra.pop("temperature", 0.2),
+    }
+    base = get_openai_base_url()
+    if base:
+        kwargs["base_url"] = base
+    kwargs.update(extra)
+    return ChatOpenAI(**kwargs)
+
 
 def get_langchain_chat_model_or_none() -> Any | None:
     """API Key가 없으면 None — Deep Agent 파이프라인에서 fallback 분기."""
-    load_dotenv()
-    key = os.getenv("OPENAI_API_KEY", "").strip()
-    if not key:
+    if not get_openai_api_key():
         return None
-    model_name = os.getenv("OPENAI_MODEL", "gpt-4o-mini").strip()
     try:
-        from langchain_openai import ChatOpenAI
-
-        return ChatOpenAI(model=model_name, temperature=0.2)
+        return build_chat_openai()
     except Exception:
         return None
 
@@ -180,8 +231,9 @@ def get_llm_routing_status() -> dict[str, Any]:
     """Streamlit 사이드바·디버그용 — 어떤 LLM이 켜져 있는지."""
     load_dotenv()
     return {
-        "openai_configured": bool(os.getenv("OPENAI_API_KEY", "").strip()),
-        "openai_model": os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
+        "openai_configured": bool(get_openai_api_key()),
+        "openai_model": get_openai_model_name(),
+        "openai_base_url": get_openai_base_url() or "https://api.openai.com/v1",
         "local_llm_enabled": is_local_llm_enabled(),
         "ollama_host": os.getenv("OLLAMA_HOST", "http://127.0.0.1:11434"),
         "ollama_model": os.getenv("OLLAMA_MODEL", "qwen2.5:7b"),
@@ -408,15 +460,11 @@ def generate_draft_with_open_source_llm(inputs: dict[str, str]) -> tuple[str, st
 
 def refine_with_openai(draft: str, inputs: dict[str, str]) -> str | None:
     """OpenAI Chat Completions로 초안 정제 — 키 없으면 None."""
-    load_dotenv()
-    key = os.getenv("OPENAI_API_KEY", "").strip()
-    if not key:
+    if not get_openai_api_key():
         return None
-    model = os.getenv("OPENAI_MODEL", "gpt-4o-mini").strip()
+    model = get_openai_model_name()
     try:
-        from openai import OpenAI
-
-        client = OpenAI(api_key=key)
+        client = build_openai_client()
         sys_msg = (
             "당신은 PMO 전문가다. 주어진 초안을 한국어 Markdown으로 다듬되, "
             "새로운 환각 수치를 만들지 말고 입력의 가정을 유지하라."
@@ -461,18 +509,14 @@ def refine_draft_for_user_choice(
     if choice == "tone_custom" and extra:
         guide = extra
 
-    load_dotenv()
-    key = os.getenv("OPENAI_API_KEY", "").strip()
-    if not key:
+    if not get_openai_api_key():
         return (
             f"{draft.rstrip()}\n\n---\n### 톤 조정 적용(API 없음 — 수동 반영용 메모)\n{guide}\n{extra}\n"
         )
 
-    model = os.getenv("OPENAI_MODEL", "gpt-4o-mini").strip()
+    model = get_openai_model_name()
     try:
-        from openai import OpenAI
-
-        client = OpenAI(api_key=key)
+        client = build_openai_client()
         sys_msg = (
             "당신은 PMO다. 주어진 초안을 한국어 Markdown으로 수정하라. "
             "새로운 환각 수치를 만들지 말 것. 지시: " + guide
@@ -514,6 +558,11 @@ def generate_with_best_available_model(inputs: dict[str, str]) -> dict[str, Any]
 
 
 __all__ = [
+    "get_openai_api_key",
+    "get_openai_base_url",
+    "get_openai_model_name",
+    "build_openai_client",
+    "build_chat_openai",
     "get_langchain_chat_model_or_none",
     "get_openai_llm_or_none",
     "get_ollama_chat_model_or_none",

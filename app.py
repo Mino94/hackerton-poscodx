@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -136,6 +137,8 @@ def _secrets_into_os_environ() -> None:
     keys = (
         "OPENAI_API_KEY",
         "OPENAI_MODEL",
+        "OPENAI_BASE_URL",
+        "OPENAI_API_BASE",
         "OPEN_SOURCE_LLM_PROVIDER",
         "OLLAMA_HOST",
         "OLLAMA_MODEL",
@@ -199,9 +202,12 @@ with st.sidebar:
         st.caption("**LLM 라우팅**")
         st.caption(
             f"OpenAI: {'ON' if _llm.get('openai_configured') else 'OFF'} · "
+            f"`{_llm.get('openai_model', '')}` · "
             f"로컬(Ollama): {'ON' if _llm.get('local_llm_enabled') else 'OFF'} · "
             f"Sub-Agent: {'ON' if _llm.get('subagents_enabled') else 'OFF'}"
         )
+        if _llm.get("openai_base_url"):
+            st.caption(f"GPT endpoint: `{_llm.get('openai_base_url')}`")
         try:
             from autopm.services.llm_router import get_mcp_routing_status
 
@@ -333,15 +339,26 @@ def _run_guided_phase(
     def _prog(msg: str) -> None:
         status_box.write(msg)
         apply_progress_message(agent_steps, msg)
-        _dash_render(agent_steps)
+        # 매 on_progress마다 전체 대시보드 repaint는 Guided 체감 속도를 크게 떨어뜨린다
+        if "완료" in msg or msg.startswith("[") or "Documentation" in msg:
+            _dash_render(agent_steps)
 
-    return run_autopm_phased(
-        phase,
-        inputs,
-        st.session_state.autopm_state_json,
-        pg.to_dict(),
-        on_progress=_prog,
-    )
+    # Guided는 Agent 대화 라운드를 줄여 단계 승인 체감 속도를 높인다
+    old_rounds = os.environ.get("AUTOPM_DIALOGUE_ROUNDS")
+    os.environ["AUTOPM_DIALOGUE_ROUNDS"] = os.getenv("AUTOPM_GUIDED_DIALOGUE_ROUNDS", "1")
+    try:
+        return run_autopm_phased(
+            phase,
+            inputs,
+            st.session_state.autopm_state_json,
+            pg.to_dict(),
+            on_progress=_prog,
+        )
+    finally:
+        if old_rounds is None:
+            os.environ.pop("AUTOPM_DIALOGUE_ROUNDS", None)
+        else:
+            os.environ["AUTOPM_DIALOGUE_ROUNDS"] = old_rounds
 
 
 def _sync_after_guided_run(res: Any, agent_steps: list | None = None) -> None:
@@ -354,8 +371,21 @@ def _sync_after_guided_run(res: Any, agent_steps: list | None = None) -> None:
     st.session_state.last_result = res
 
 
+def _bulk_phase_note(res: Any, status_box: Any) -> bool:
+    """단계 오류가 있으면 status에 표시하고 False — 이후 PPT 체인 중단."""
+    err = (getattr(res, "structured", None) or {}).get("error")
+    if err:
+        status_box.write(f"⚠️ 단계 오류: `{err}` — PPT 체인을 건너뜁니다.")
+        return False
+    errs = getattr(getattr(res, "state", None), "errors", None) or []
+    if errs:
+        status_box.write(f"⚠️ {errs[-1]}")
+    return True
+
+
 def _execute_guided_bulk(preset_id: str, rev: str) -> None:
-    """프리셋 기본값으로 연속 실행."""
+    """프리셋 기본값으로 연속 실행 — 단계 UI는 status 박스에 실시간 표시."""
+    t0 = time.perf_counter()
     pg = _get_pg()
     _apply_revision_to_pg(pg, rev)
     inputs = _base_inputs_from_interview()
@@ -383,80 +413,150 @@ def _execute_guided_bulk(preset_id: str, rev: str) -> None:
 
     final_ui = st.session_state.guided_ui_step
     res: Any = None
+    ppt_api_saved = os.environ.get("AUTOPM_PPT_API")
+    presenton_mcp_saved = os.environ.get("AUTOPM_PRESENTON_USE_MCP")
 
-    with st.status("Guided 한번에 진행…", expanded=True) as status:
+    try:
+        with st.status("Guided 한번에 진행… (완료까지 2~5분, Core 단계가 가장 김)", expanded=True) as status:
 
-        def _write(msg: str) -> None:
-            status.write(msg)
-            apply_progress_message(agent_steps, msg)
-            _dash_render(agent_steps)
+            def _elapsed() -> str:
+                return f"{int(time.perf_counter() - t0)}s"
 
-        if preset_id in ("to_draft", "to_core", "to_ppt"):
-            pg.selected_options["input_confirm"] = "proceed"
-            _mark(pg, "idea_input", "interview", "confirm_input")
-            _write("초안 생성")
-            simulate_agent_progress(agent_steps, render_fn=_dash_render)
-            res = _run_guided_phase(PHASE_DRAFT_ONLY, inputs, pg, agent_steps, status)
-            _sync_after_guided_run(res, agent_steps)
-            pg = _get_pg()
-            pg.draft_generated = True
-            _mark(pg, "draft_generate")
-            final_ui = "draft_decide"
+            def _write(msg: str, *, dash: bool = False) -> None:
+                status.write(f"`{_elapsed()}` {msg}")
+                apply_progress_message(agent_steps, msg)
+                if dash:
+                    _dash_render(agent_steps)
 
-        if preset_id in ("to_core", "to_ppt") and res is not None:
-            pg.selected_options["draft_tone"] = "proceed"
-            _mark(pg, "draft_approve")
-            _write("Core + 문서")
-            res = _run_guided_phase(PHASE_CORE_DOC, inputs, pg, agent_steps, status)
-            _sync_after_guided_run(res, agent_steps)
-            pg = _get_pg()
-            _mark(pg, "slide_plan_generate", "slide_plan_approve", status="pending")
-            pg.step_statuses["slide_plan_generate"] = "active"
-            final_ui = "slide_pick"
+            def _ui_step(ui_step: str) -> None:
+                st.session_state.guided_ui_step = ui_step
 
-        if preset_id == "to_ppt" and res is not None:
-            pg.selected_options["slide_structure"] = "default_10"
-            pg.selected_options["visual_style"] = "execution_plan"
-            pg.selected_options["visual_asset_plan"] = "proceed"
-            _mark(pg, "slide_plan_generate", "slide_plan_approve", "visual_style_pick")
-            for label, phase in (
-                ("Storyline", PHASE_STORYLINE),
-                ("Visualization", PHASE_VISUALIZATION),
-                ("Graphics", PHASE_GRAPHICS),
-                ("PPT", PHASE_COMPOSER),
-            ):
-                _write(label)
-                res = _run_guided_phase(phase, inputs, pg, agent_steps, status)
+            # Presenton Docker 미기동 시 MCP/REST 600s 대기 방지
+            try:
+                from autopm.services.presenton_export import check_presenton_health
+
+                ok_p, why = check_presenton_health()
+                if not ok_p:
+                    os.environ["AUTOPM_PPT_API"] = "python-pptx"
+                    os.environ["AUTOPM_PRESENTON_USE_MCP"] = "false"
+                    _write(f"Presenton 미연결({why}) → python-pptx 사용")
+            except Exception:
+                pass
+
+            if preset_id in ("to_draft", "to_core", "to_ppt"):
+                pg.selected_options["input_confirm"] = "proceed"
+                _mark(pg, "idea_input", "interview", "confirm_input")
+                _ui_step("draft_generate")
+                _write("**[1/4] 1차 초안** 생성 중…", dash=True)
+                pg = _get_pg()
+                res = _run_guided_phase(PHASE_DRAFT_ONLY, inputs, pg, agent_steps, status)
                 _sync_after_guided_run(res, agent_steps)
                 pg = _get_pg()
-            pg.slide_plan_generated = True
-            pg.visual_plan_generated = True
-            if res:
-                pg.last_storyline_json = res.state.slide_storyline_raw or ""
-                pg.last_visualization_json = res.state.visualization_raw or ""
-                pg.last_graphics_json = res.state.presentation_graphics_raw or ""
-            _mark(pg, "visual_asset_generate", "visual_plan_approve", "ppt_generate", "post_ppt_review")
-            final_ui = "post_ppt"
+                pg.draft_generated = True
+                _mark(pg, "draft_generate")
+                final_ui = "draft_decide"
+                _write("초안 완료 → Core 준비", dash=True)
 
-        if preset_id == "ppt_from_core":
-            pg.selected_options["slide_structure"] = "default_10"
-            pg.selected_options["visual_style"] = "execution_plan"
-            pg.selected_options["visual_asset_plan"] = "proceed"
-            _mark(pg, "slide_plan_generate", "slide_plan_approve", "visual_style_pick")
-            for label, phase in (
-                ("Storyline", PHASE_STORYLINE),
-                ("Visualization", PHASE_VISUALIZATION),
-                ("Graphics", PHASE_GRAPHICS),
-                ("PPT", PHASE_COMPOSER),
-            ):
-                _write(label)
-                res = _run_guided_phase(phase, inputs, pg, agent_steps, status)
-                _sync_after_guided_run(res, agent_steps)
+            if preset_id in ("to_core", "to_ppt") and res is not None:
                 pg = _get_pg()
-            _mark(pg, "visual_asset_generate", "visual_plan_approve", "ppt_generate", "post_ppt_review")
-            final_ui = "post_ppt"
+                pg.selected_options["draft_tone"] = "proceed"
+                _mark(pg, "draft_approve")
+                _ui_step("core_run")
+                _write(
+                    "**[2/4] Core 8 Agent + 문서화** (가장 오래 걸림 — API 없으면 mock으로 빠름)…",
+                    dash=True,
+                )
+                inputs = _base_inputs_from_interview()
+                res = _run_guided_phase(PHASE_CORE_DOC, inputs, pg, agent_steps, status)
+                _sync_after_guided_run(res, agent_steps)
+                if not _bulk_phase_note(res, status):
+                    final_ui = "core_run"
+                else:
+                    pg = _get_pg()
+                    _mark(pg, "slide_plan_generate", "slide_plan_approve", status="pending")
+                    pg.step_statuses["slide_plan_generate"] = "active"
+                    final_ui = "slide_pick"
+                    _write("Core+문서 완료 → PPT 체인", dash=True)
 
-        status.write("완료")
+            if preset_id == "to_ppt" and res is not None and _bulk_phase_note(res, status):
+                pg = _get_pg()
+                inputs = _base_inputs_from_interview()
+                ws_md = (st.session_state.autopm_state_json or {}).get("workspace_markdown") or ""
+                if not str(ws_md).strip():
+                    status.write("⚠️ workspace_markdown 없음 — Core 단계를 먼저 완료해야 합니다.")
+                    final_ui = "core_run"
+                else:
+                    pg.selected_options["slide_structure"] = "default_10"
+                    pg.selected_options["visual_style"] = "execution_plan"
+                    pg.selected_options["visual_asset_plan"] = "proceed"
+                    _mark(pg, "slide_plan_generate", "slide_plan_approve", "visual_style_pick")
+                    for n, (label, phase, ui_step) in enumerate(
+                        (
+                            ("Storyline", PHASE_STORYLINE, "slide_exec"),
+                            ("Visualization", PHASE_VISUALIZATION, "vis_run"),
+                            ("Graphics", PHASE_GRAPHICS, "gfx_run"),
+                            ("PPT Composer", PHASE_COMPOSER, "compose_run"),
+                        ),
+                        start=3,
+                    ):
+                        _ui_step(ui_step)
+                        _write(f"**[{n}/4] {label}** 실행 중…", dash=True)
+                        pg = _get_pg()
+                        res = _run_guided_phase(phase, inputs, pg, agent_steps, status)
+                        _sync_after_guided_run(res, agent_steps)
+                        if not _bulk_phase_note(res, status):
+                            break
+                        inputs = _base_inputs_from_interview()
+                        pg = _get_pg()
+                    pg = _get_pg()
+                    pg.slide_plan_generated = True
+                    pg.visual_plan_generated = True
+                    if res:
+                        pg.last_storyline_json = res.state.slide_storyline_raw or ""
+                        pg.last_visualization_json = res.state.visualization_raw or ""
+                        pg.last_graphics_json = res.state.presentation_graphics_raw or ""
+                    _mark(pg, "visual_asset_generate", "visual_plan_approve", "ppt_generate", "post_ppt_review")
+                    final_ui = "post_ppt"
+                    _write(f"**완료** (`{_elapsed()}`) — 산출물 탭에서 PPT 확인", dash=True)
+
+            if preset_id == "ppt_from_core":
+                pg = _get_pg()
+                inputs = _base_inputs_from_interview()
+                pg.selected_options["slide_structure"] = "default_10"
+                pg.selected_options["visual_style"] = "execution_plan"
+                pg.selected_options["visual_asset_plan"] = "proceed"
+                _mark(pg, "slide_plan_generate", "slide_plan_approve", "visual_style_pick")
+                for label, phase, ui_step in (
+                    ("Storyline", PHASE_STORYLINE, "slide_exec"),
+                    ("Visualization", PHASE_VISUALIZATION, "vis_run"),
+                    ("Graphics", PHASE_GRAPHICS, "gfx_run"),
+                    ("PPT", PHASE_COMPOSER, "compose_run"),
+                ):
+                    _ui_step(ui_step)
+                    _write(f"**{label}** 실행 중…", dash=True)
+                    pg = _get_pg()
+                    res = _run_guided_phase(phase, inputs, pg, agent_steps, status)
+                    _sync_after_guided_run(res, agent_steps)
+                    if not _bulk_phase_note(res, status):
+                        break
+                    inputs = _base_inputs_from_interview()
+                    pg = _get_pg()
+                _mark(_get_pg(), "visual_asset_generate", "visual_plan_approve", "ppt_generate", "post_ppt_review")
+                final_ui = "post_ppt"
+
+    except Exception as exc:
+        st.error(f"한번에 진행 중 오류: {exc}")
+        if res is None:
+            final_ui = st.session_state.get("guided_ui_step", "input_confirm")
+    finally:
+        if ppt_api_saved is None:
+            os.environ.pop("AUTOPM_PPT_API", None)
+        else:
+            os.environ["AUTOPM_PPT_API"] = ppt_api_saved
+        if presenton_mcp_saved is None:
+            os.environ.pop("AUTOPM_PRESENTON_USE_MCP", None)
+        else:
+            os.environ["AUTOPM_PRESENTON_USE_MCP"] = presenton_mcp_saved
 
     if res is not None:
         finalize_agent_dashboard(agent_steps, res)
@@ -465,8 +565,15 @@ def _execute_guided_bulk(preset_id: str, rev: str) -> None:
             overall_progress.progress(1.0)
 
     st.session_state.guided_ui_step = final_ui
-    _save_pg(pg)
-    st.success("한번에 진행 완료 — **산출물** 탭에서 PPT를 확인하세요.")
+    _save_pg(_get_pg())
+    if final_ui == "post_ppt":
+        st.success(f"한번에 진행 완료 ({int(time.perf_counter() - t0)}s) — **산출물** 탭에서 PPT를 확인하세요.")
+    else:
+        st.warning(
+            f"일부 단계만 완료됨 ({int(time.perf_counter() - t0)}s) — "
+            f"현재 UI 단계: **{GUIDED_UI_TITLE.get(final_ui, final_ui)}**. "
+            "위 status 로그의 ⚠️ 메시지를 확인하세요."
+        )
     st.rerun()
 
 
@@ -493,8 +600,8 @@ def _render_guided_panel() -> None:
         _execute_guided_bulk(bulk_preset, rev)
         return
 
-    with st.expander(f"단계별 세부 — {GUIDED_UI_TITLE.get(gu, gu)}", expanded=False):
-        st.caption("프리셋 대신 한 단계씩 진행할 때만 펼치세요.")
+    with st.expander(f"단계별 세부 — {GUIDED_UI_TITLE.get(gu, gu)}", expanded=True):
+        st.caption("버튼 한 번에 **다음 단계까지 실행**됩니다. 느리면 위 **⚡ 한번에 진행** 프리셋을 권장합니다.")
 
         def _mark_steps(pg2: PPTGenerationState, *ids: str, status: str = "complete") -> None:
             for i in ids:
@@ -502,17 +609,63 @@ def _render_guided_panel() -> None:
                     pg2.step_statuses[i] = status
             _save_pg(pg2)
 
+        def _slide_pick_and_storyline(struct_key: str, *, notes: str = "") -> None:
+            pg.selected_options["slide_structure"] = struct_key
+            if notes:
+                pg.user_decisions["slide_custom_notes"] = notes
+            _apply_revision_to_pg(pg, rev)
+            inputs = _base_inputs_from_interview()
+            agent_steps = st.session_state.agent_steps or get_agent_steps()
+            with st.status("storyline", expanded=True) as status:
+                res = _run_guided_phase(PHASE_STORYLINE, inputs, pg, agent_steps, status)
+            _sync_after_guided_run(res, agent_steps)
+            pg2 = _get_pg()
+            pg2.slide_plan_generated = True
+            pg2.last_storyline_json = res.state.slide_storyline_raw or ""
+            _mark_steps(pg2, "slide_plan_generate", "slide_plan_approve")
+            st.session_state.guided_ui_step = "style_pick"
+            _save_pg(pg2)
+            st.rerun()
+
+        def _style_and_visualize(style_key: str, vap_key: str = "proceed") -> None:
+            pg.selected_options["visual_style"] = style_key
+            pg.selected_options["visual_asset_plan"] = vap_key
+            _apply_revision_to_pg(pg, rev)
+            inputs = _base_inputs_from_interview()
+            agent_steps = st.session_state.agent_steps or get_agent_steps()
+            with st.status("visualization", expanded=True) as status:
+                res = _run_guided_phase(PHASE_VISUALIZATION, inputs, pg, agent_steps, status)
+            _sync_after_guided_run(res, agent_steps)
+            pg2 = _get_pg()
+            pg2.last_visualization_json = res.state.visualization_raw or ""
+            pg2.visual_plan_generated = True
+            _mark_steps(pg2, "visual_asset_generate", "visual_style_pick")
+            st.session_state.guided_ui_step = "visual_ok"
+            _save_pg(pg2)
+            st.rerun()
+
         if gu == "input_confirm":
             st.markdown("##### 3) 입력 정보 확인")
             render_input_confirm_table(_get_iv)
             st.markdown("**세부 승인**")
             a, b, c = st.columns(3)
-            if a.button("① 이 정보로 계속 진행", key="in_ok"):
+            if a.button("① 이 정보로 계속 → 초안 생성", key="in_ok", type="primary"):
                 pg.selected_options["input_confirm"] = "proceed"
                 _apply_revision_to_pg(pg, rev)
                 _mark_steps(pg, "idea_input", "interview", "confirm_input")
-                st.session_state.guided_ui_step = "draft_generate"
+                inputs = _base_inputs_from_interview()
+                agent_steps = get_agent_steps()
+                with st.status("draft_only", expanded=True) as status:
+                    res = _run_guided_phase(PHASE_DRAFT_ONLY, inputs, pg, agent_steps, status)
+                    status.write("초안 완료")
+                _sync_after_guided_run(res, agent_steps)
+                pg = _get_pg()
+                pg.draft_generated = True
+                _mark_steps(pg, "draft_generate")
+                st.session_state.guided_ui_step = "draft_decide"
                 _save_pg(pg)
+                finalize_agent_dashboard(agent_steps, res)
+                _dash_render(agent_steps)
                 st.rerun()
             if b.button("② 부족한 정보 추가 입력", key="in_add"):
                 pg.selected_options["input_confirm"] = "add_info"
@@ -551,12 +704,22 @@ def _render_guided_panel() -> None:
             st.markdown("##### 5) 초안 승인 / 톤 선택")
             st.code(st.session_state.crew_inputs.get("open_source_draft", "")[:6000], language="markdown")
             r1, r2, r3, r4, r5 = st.columns(5)
-            if r1.button("① 그대로 진행"):
+            if r1.button("① 그대로 진행 → Core+문서", type="primary"):
                 pg.selected_options["draft_tone"] = "proceed"
                 _apply_revision_to_pg(pg, rev)
                 _mark_steps(pg, "draft_approve")
-                st.session_state.guided_ui_step = "core_run"
+                inputs = _base_inputs_from_interview()
+                agent_steps = get_agent_steps()
+                with st.status("core_doc", expanded=True) as status:
+                    res = _run_guided_phase(PHASE_CORE_DOC, inputs, pg, agent_steps, status)
+                _sync_after_guided_run(res, agent_steps)
+                pg = _get_pg()
+                _mark_steps(pg, "slide_plan_generate", "slide_plan_approve", status="pending")
+                pg.step_statuses["slide_plan_generate"] = "active"
+                st.session_state.guided_ui_step = "slide_pick"
                 _save_pg(pg)
+                finalize_agent_dashboard(agent_steps, res)
+                _dash_render(agent_steps)
                 st.rerun()
             if r2.button("② 더 전문적"):
                 pg.selected_options["draft_tone"] = "tone_pro"
@@ -612,8 +775,9 @@ def _render_guided_panel() -> None:
                 st.rerun()
 
         elif gu == "core_run":
-            st.markdown("##### 6–7) Core Deep Agents + 문서 (승인 후 실행)")
-            if st.button("현재 단계 승인 → Core+문서 생성", type="primary"):
+            st.markdown("##### 6–7) Core Deep Agents + 문서")
+            st.caption("초안에서 **① 그대로 진행 → Core+문서**를 누르면 이 단계는 건너뜁니다.")
+            if st.button("Core+문서 생성 (재실행)", type="primary"):
                 inputs = _base_inputs_from_interview()
                 agent_steps = get_agent_steps()
                 simulate_agent_progress(agent_steps, render_fn=_dash_render)
@@ -634,55 +798,39 @@ def _render_guided_panel() -> None:
                 st.rerun()
 
         elif gu == "slide_pick":
-            st.markdown("##### 8) 슬라이드 구성 선택")
+            st.markdown("##### 8) 슬라이드 구성 선택 → Storyline 자동 실행")
             s1, s2, s3, s4, s5 = st.columns(5)
-            if s1.button("① 기본 10장"):
-                pg.selected_options["slide_structure"] = "default_10"
-                _save_pg(pg)
-                st.session_state.guided_ui_step = "slide_exec"
-                st.rerun()
+            if s1.button("① 기본 10장", type="primary"):
+                _slide_pick_and_storyline("default_10")
             if s2.button("② 간략 6장"):
-                pg.selected_options["slide_structure"] = "compact_6"
-                _save_pg(pg)
-                st.session_state.guided_ui_step = "slide_exec"
-                st.rerun()
+                _slide_pick_and_storyline("compact_6")
             if s3.button("③ 상세 12장"):
-                pg.selected_options["slide_structure"] = "detailed_12"
-                _save_pg(pg)
-                st.session_state.guided_ui_step = "slide_exec"
-                st.rerun()
+                _slide_pick_and_storyline("detailed_12")
             if s4.button("④ 추가/삭제"):
-                pg.selected_options["slide_structure"] = "custom_add_remove"
-                pg.user_decisions["slide_custom_notes"] = rev
-                _save_pg(pg)
-                st.session_state.guided_ui_step = "slide_exec"
-                st.rerun()
+                _slide_pick_and_storyline("custom_add_remove", notes=rev)
             if s5.button("⑤ 순서 변경"):
-                pg.selected_options["slide_structure"] = "reorder"
-                pg.user_decisions["slide_custom_notes"] = rev
-                _save_pg(pg)
-                st.session_state.guided_ui_step = "slide_exec"
-                st.rerun()
+                _slide_pick_and_storyline("reorder", notes=rev)
 
         elif gu == "slide_exec":
-            st.markdown("##### 슬라이드 스토리라인 생성")
-            if st.button("Storyline Agent 실행"):
+            st.markdown("##### 슬라이드 스토리라인 (재실행)")
+            st.caption("구성 선택 시 자동 실행됩니다. 실패 시에만 아래 버튼을 사용하세요.")
+            if st.button("Storyline Agent 재실행"):
                 inputs = _base_inputs_from_interview()
                 agent_steps = st.session_state.agent_steps or get_agent_steps()
                 _apply_revision_to_pg(pg, rev)
                 with st.status("storyline", expanded=True) as status:
                     res = _run_guided_phase(PHASE_STORYLINE, inputs, pg, agent_steps, status)
-                st.session_state.autopm_state_json = res.state.model_dump()
+                _sync_after_guided_run(res, agent_steps)
                 pg = _get_pg()
                 pg.slide_plan_generated = True
                 pg.last_storyline_json = res.state.slide_storyline_raw or ""
-                _mark_steps(pg, "slide_plan_generate")
+                _mark_steps(pg, "slide_plan_generate", "slide_plan_approve")
                 st.session_state.guided_ui_step = "style_pick"
                 _save_pg(pg)
                 st.rerun()
 
         elif gu == "style_pick":
-            st.markdown("##### 9) 장표 스타일")
+            st.markdown("##### 9) 장표 스타일 → Visualization 자동 실행")
             _pgv = _get_pg()
             _snip = (
                 (_pgv.last_storyline_json or "")[:4000]
@@ -696,70 +844,42 @@ def _render_guided_panel() -> None:
             st.code(_snip or "(스토리라인 없음)", language="json")
             v1, v2, v3, v4, v5 = st.columns(5)
             if v1.button("① 경영진 보고형"):
-                pg.selected_options["visual_style"] = "executive"
-                _save_pg(pg)
-                st.session_state.guided_ui_step = "vap_options"
-                st.rerun()
+                _style_and_visualize("executive")
             if v2.button("② 컨설팅 제안서형"):
-                pg.selected_options["visual_style"] = "consulting"
-                _save_pg(pg)
-                st.session_state.guided_ui_step = "vap_options"
-                st.rerun()
-            if v3.button("③ 실무 추진계획형"):
-                pg.selected_options["visual_style"] = "execution_plan"
-                _save_pg(pg)
-                st.session_state.guided_ui_step = "vap_options"
-                st.rerun()
+                _style_and_visualize("consulting")
+            if v3.button("③ 실무 추진계획형", type="primary"):
+                _style_and_visualize("execution_plan")
             if v4.button("④ 기술 아키텍처형"):
-                pg.selected_options["visual_style"] = "architecture"
-                _save_pg(pg)
-                st.session_state.guided_ui_step = "vap_options"
-                st.rerun()
+                _style_and_visualize("architecture")
             if v5.button("⑤ 미니멀 요약형"):
-                pg.selected_options["visual_style"] = "minimal"
-                _save_pg(pg)
-                st.session_state.guided_ui_step = "vap_options"
-                st.rerun()
+                _style_and_visualize("minimal")
 
         elif gu == "vap_options":
-            st.markdown("##### 10) Visual Asset Plan 방향")
+            st.markdown("##### 10) Visual Asset Plan (고급)")
+            st.caption("스타일 선택 시 Visualization이 이미 실행되었습니다.")
+            cur_style = pg.selected_options.get("visual_style", "execution_plan")
             q1, q2, q3, q4, q5 = st.columns(5)
-            if q1.button("① 그대로"):
-                pg.selected_options["visual_asset_plan"] = "proceed"
-                _save_pg(pg)
-                st.session_state.guided_ui_step = "vis_run"
-                st.rerun()
+            if q1.button("① 그대로 재실행"):
+                _style_and_visualize(cur_style, "proceed")
             if q2.button("② 그림 더 많이"):
-                pg.selected_options["visual_asset_plan"] = "more_graphics"
-                _save_pg(pg)
-                st.session_state.guided_ui_step = "vis_run"
-                st.rerun()
+                _style_and_visualize(cur_style, "more_graphics")
             if q3.button("③ 표 중심"):
-                pg.selected_options["visual_asset_plan"] = "table_focus"
-                _save_pg(pg)
-                st.session_state.guided_ui_step = "vis_run"
-                st.rerun()
+                _style_and_visualize(cur_style, "table_focus")
             if q4.button("④ 프로세스 강화"):
-                pg.selected_options["visual_asset_plan"] = "process_focus"
-                _save_pg(pg)
-                st.session_state.guided_ui_step = "vis_run"
-                st.rerun()
+                _style_and_visualize(cur_style, "process_focus")
             if q5.button("⑤ 슬라이드별 수정"):
-                pg.selected_options["visual_asset_plan"] = "per_slide_edit"
                 pg.user_decisions["visual_slide_edit"] = rev
-                _save_pg(pg)
-                st.session_state.guided_ui_step = "vis_run"
-                st.rerun()
+                _style_and_visualize(cur_style, "per_slide_edit")
 
         elif gu == "vis_run":
-            st.markdown("##### Visualization Agent")
-            if st.button("Visualization 실행"):
+            st.markdown("##### Visualization (재실행)")
+            if st.button("Visualization 재실행"):
                 inputs = _base_inputs_from_interview()
                 agent_steps = st.session_state.agent_steps or get_agent_steps()
                 _apply_revision_to_pg(pg, rev)
                 with st.status("visualization", expanded=True) as status:
                     res = _run_guided_phase(PHASE_VISUALIZATION, inputs, pg, agent_steps, status)
-                st.session_state.autopm_state_json = res.state.model_dump()
+                _sync_after_guided_run(res, agent_steps)
                 pg = _get_pg()
                 pg.last_visualization_json = res.state.visualization_raw or ""
                 pg.visual_plan_generated = True
@@ -769,50 +889,55 @@ def _render_guided_panel() -> None:
                 st.rerun()
 
         elif gu == "visual_ok":
-            st.markdown("##### Visual 계획 확인")
+            st.markdown("##### Visual 계획 확인 → Graphics + PPT")
             st.code(_get_pg().last_visualization_json[:5000] if _get_pg().last_visualization_json else "", language="json")
-            if st.button("승인 → Presentation Graphics"):
+            if st.button("승인 → Graphics + PPT 생성", type="primary"):
                 _mark_steps(pg, "visual_plan_approve")
-                st.session_state.guided_ui_step = "gfx_run"
-                _save_pg(pg)
-                st.rerun()
-
-        elif gu == "gfx_run":
-            st.markdown("##### Presentation Graphics Agent")
-            if st.button("Graphics 실행"):
                 inputs = _base_inputs_from_interview()
                 agent_steps = st.session_state.agent_steps or get_agent_steps()
                 _apply_revision_to_pg(pg, rev)
-                with st.status("graphics", expanded=True) as status:
+                with st.status("ppt_chain", expanded=True) as status:
                     res = _run_guided_phase(PHASE_GRAPHICS, inputs, pg, agent_steps, status)
-                st.session_state.autopm_state_json = res.state.model_dump()
+                    status.write("PPT Composer")
+                    res = _run_guided_phase(PHASE_COMPOSER, inputs, _get_pg(), agent_steps, status)
+                _sync_after_guided_run(res, agent_steps)
                 pg = _get_pg()
                 pg.last_graphics_json = res.state.presentation_graphics_raw or ""
-                _save_pg(pg)
-                st.session_state.guided_ui_step = "compose_run"
-                st.rerun()
-
-        elif gu == "compose_run":
-            st.markdown("##### 11) PPT Composer + 파일 생성")
-            if st.button("PPT 생성 (Composer)", type="primary"):
-                inputs = _base_inputs_from_interview()
-                agent_steps = st.session_state.agent_steps or get_agent_steps()
-                _apply_revision_to_pg(pg, rev)
-                with st.status("composer", expanded=True) as status:
-                    res = _run_guided_phase(PHASE_COMPOSER, inputs, pg, agent_steps, status)
-                st.session_state.autopm_state_json = res.state.model_dump()
-                st.session_state.crew_inputs.update(res.state.user_input)
-                st.session_state.last_result = res
-                if res.structured.get("ppt_generation_state"):
-                    st.session_state.ppt_gen = res.structured["ppt_generation_state"]
-                st.session_state.agent_steps = agent_steps
                 _mark_steps(pg, "ppt_generate", "post_ppt_review")
                 st.session_state.guided_ui_step = "post_ppt"
                 _save_pg(pg)
                 finalize_agent_dashboard(agent_steps, res)
                 _dash_render(agent_steps)
-                if overall_progress is not None:
-                    overall_progress.progress(1.0)
+                st.rerun()
+
+        elif gu == "gfx_run":
+            st.markdown("##### Graphics (재실행)")
+            st.caption("Visual 승인 시 PPT까지 한 번에 생성됩니다.")
+            if st.button("Graphics 재실행"):
+                inputs = _base_inputs_from_interview()
+                agent_steps = st.session_state.agent_steps or get_agent_steps()
+                _apply_revision_to_pg(pg, rev)
+                with st.status("graphics", expanded=True) as status:
+                    res = _run_guided_phase(PHASE_GRAPHICS, inputs, pg, agent_steps, status)
+                _sync_after_guided_run(res, agent_steps)
+                st.session_state.guided_ui_step = "compose_run"
+                _save_pg(_get_pg())
+                st.rerun()
+
+        elif gu == "compose_run":
+            st.markdown("##### 11) PPT Composer (재실행)")
+            if st.button("PPT만 다시 생성", type="primary"):
+                inputs = _base_inputs_from_interview()
+                agent_steps = st.session_state.agent_steps or get_agent_steps()
+                _apply_revision_to_pg(pg, rev)
+                with st.status("composer", expanded=True) as status:
+                    res = _run_guided_phase(PHASE_COMPOSER, inputs, pg, agent_steps, status)
+                _sync_after_guided_run(res, agent_steps)
+                _mark_steps(_get_pg(), "ppt_generate", "post_ppt_review")
+                st.session_state.guided_ui_step = "post_ppt"
+                _save_pg(_get_pg())
+                finalize_agent_dashboard(agent_steps, res)
+                _dash_render(agent_steps)
                 st.rerun()
 
         elif gu == "post_ppt":

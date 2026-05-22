@@ -26,15 +26,13 @@ def is_openai_ppt_enhance_enabled() -> bool:
 
 
 def _openai_json_completion(system: str, user: str) -> dict[str, Any] | None:
-    load_dotenv()
-    key = os.getenv("OPENAI_API_KEY", "").strip()
-    if not key:
-        return None
-    model = os.getenv("OPENAI_MODEL", "gpt-4o-mini").strip()
-    try:
-        from openai import OpenAI
+    from autopm.services.llm_router import build_openai_client, get_openai_api_key, get_openai_model_name
 
-        client = OpenAI(api_key=key)
+    if not get_openai_api_key():
+        return None
+    model = get_openai_model_name()
+    try:
+        client = build_openai_client()
         r = client.chat.completions.create(
             model=model,
             temperature=0.25,
