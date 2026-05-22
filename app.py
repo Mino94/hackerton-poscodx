@@ -50,6 +50,39 @@ from autopm.ui.results_panel import render_results_tab  # noqa: E402
 
 load_dotenv()
 
+
+def _is_streamlit_community_cloud() -> bool:
+    """Community Cloud 컨테이너(/mount/src) 여부 — 로컬·Docker와 구분."""
+    if os.getenv("STREAMLIT_SERVER_ENVIRONMENT", "").strip().lower() == "cloud":
+        return True
+    cwd = os.getcwd().replace("\\", "/")
+    return cwd.startswith("/mount/src") or "/mount/src/" in cwd
+
+
+def _configure_streamlit_cloud_runtime() -> None:
+    """
+    Streamlit Cloud: Presenton/Docker 없음, 디스크는 /tmp 위주.
+    Secrets 미설정 시에도 데모가 돌아가도록 기본값을 채운다.
+    """
+    if not _is_streamlit_community_cloud():
+        return
+    (_ROOT / "outputs").mkdir(parents=True, exist_ok=True)
+    (_ROOT / "data").mkdir(parents=True, exist_ok=True)
+    defaults = {
+        "AUTOPM_PPT_API": "python-pptx",
+        "AUTOPM_PRESENTON_USE_MCP": "false",
+        "CHROMA_PERSIST_DIR": "/tmp/chroma_autopm",
+        "AUTOPM_SKIP_PROGRESS_SIM": "true",
+        "AUTOPM_GUIDED_DIALOGUE_ROUNDS": "1",
+        "OPEN_SOURCE_LLM_PROVIDER": os.getenv("OPEN_SOURCE_LLM_PROVIDER", "mock") or "mock",
+    }
+    for k, v in defaults.items():
+        if v and not os.getenv(k):
+            os.environ[k] = str(v)
+
+
+_configure_streamlit_cloud_runtime()
+
 # 데모·발표 시 레이어 설명을 빠르게 보여주기 위한 정적 카드 — 코드 동작과 무관하다.
 _LAYERS_KR = """
 | Layer | MVP 구현 |
@@ -145,6 +178,14 @@ def _secrets_into_os_environ() -> None:
         "AUTOPM_RATE_LIMIT_PER_MIN",
         "AUTOPM_USE_LOCAL_LLM",
         "AUTOPM_ENABLE_SUBAGENTS",
+        "AUTOPM_PPT_API",
+        "AUTOPM_PRESENTON_USE_MCP",
+        "AUTOPM_USE_CHROMA_RAG",
+        "CHROMA_PERSIST_DIR",
+        "AUTOPM_SKIP_PROGRESS_SIM",
+        "AUTOPM_GUIDED_DIALOGUE_ROUNDS",
+        "AUTOPM_DIALOGUE_ROUNDS",
+        "PRESENTON_BASE_URL",
     )
     try:
         sec = st.secrets
@@ -156,9 +197,7 @@ def _secrets_into_os_environ() -> None:
     for key in keys:
         try:
             val = sec[key]
-        except StreamlitSecretNotFoundError:
-            return
-        except (KeyError, TypeError):
+        except (KeyError, TypeError, StreamlitSecretNotFoundError):
             continue
         if val is not None and str(val).strip():
             os.environ.setdefault(key, str(val))

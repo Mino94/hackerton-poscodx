@@ -13,17 +13,22 @@
 
 ## 2. Secrets (비워도 됨)
 
-데모만이면 **Secrets에 아무것도 넣지 않고** Deploy 해도 됩니다.
+데모만이면 **Secrets에 아무것도 넣지 않고** Deploy 해도 됩니다.  
+(Cloud 런타임이 `python-pptx`·`/tmp/chroma` 등 기본값을 자동 설정합니다.)
 
-- `OPENAI_API_KEY` 없음 → Fallback Markdown / Mock 초안 / Fallback PPT 경로로 동작합니다.
-- 나중에 OpenAI 쓰려면 Secrets에만 추가:
+권장: 저장소의 **`.streamlit/secrets.cloud.example.toml`** 내용을 Secrets에 붙여넣기.
 
-```toml
-OPENAI_API_KEY = "sk-..."
-OPENAI_MODEL = "gpt-4o-mini"
-```
+- `OPENAI_API_KEY` 없음 → Fallback Markdown / Mock 초안 / Fallback PPT
+- OpenAI 사용 시 Secrets에 `OPENAI_API_KEY` 추가
 
-(`app.py`가 Secrets를 환경 변수로 옮겨 줍니다.)
+(`app.py`가 Secrets를 환경 변수로 옮깁니다.)
+
+## 빠른 링크
+
+- 배포 콘솔: https://share.streamlit.io/
+- GitHub 앱 파일: https://github.com/Mino94/hackerton-poscodx/blob/main/app.py  
+  → Create app → **Paste GitHub URL**에 위 주소 입력
+- 로컬: `powershell -File scripts/open_streamlit_deploy.ps1`
 
 ## 3. 고급 설정 (권장)
 
