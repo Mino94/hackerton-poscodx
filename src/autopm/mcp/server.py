@@ -8,8 +8,10 @@ from mcp.server.fastmcp import FastMCP
 
 from autopm.mcp.registry import (
     tool_estimate_cost,
+    tool_extract_proposal_info,
     tool_fp_estimate,
     tool_gantt_outline,
+    tool_generate_interview_questions,
     tool_mermaid_process,
     tool_normalize_input,
     tool_rag_search,
@@ -27,8 +29,26 @@ mcp = FastMCP(
 
 @mcp.tool()
 def rag_search(query: str) -> str:
-    """조직 지식 템플릿에서 키워드 검색."""
+    """사내 추진계획서 표준·가이드 RAG 검색(Chroma/키워드)."""
     return tool_rag_search(query)
+
+
+@mcp.tool()
+def retrieve_reference_context(query: str) -> str:
+    """사내 표준 양식·가이드에서 관련 컨텍스트 RAG 검색."""
+    return tool_rag_search(query)
+
+
+@mcp.tool()
+def extract_proposal_info(user_input: str) -> str:
+    """추진계획서 제목에서 회사명·전략·시스템·범위 JSON 추출."""
+    return tool_extract_proposal_info(user_input)
+
+
+@mcp.tool()
+def generate_interview_questions(extracted_info: str) -> str:
+    """추출 정보 기반 인터뷰 보완 질문 5개 JSON 배열."""
+    return tool_generate_interview_questions(extracted_info)
 
 
 @mcp.tool()

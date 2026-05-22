@@ -8,7 +8,7 @@ from typing import Any
 
 from autopm.tools.calculation_engine import estimate_rough_cost, fp_placeholder
 from autopm.tools.document_parser import parse_paste_text
-from autopm.tools.rag_engine import keyword_search
+from autopm.tools.proposal_rag import retrieve_reference_context
 from autopm.tools.visualization_generator import markdown_gantt_placeholder, mermaid_simple_flow
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -25,9 +25,36 @@ def _ctx_get(context: dict[str, Any], *keys: str, default: str = "") -> str:
 
 
 def tool_rag_search(query: str, context: dict[str, Any] | None = None) -> str:
-    """조직 지식 템플릿에서 키워드 검색 — 요건·AS-IS 작성 시 참고."""
-    q = query.strip() or _ctx_get(context or {}, "proposal_title", "idea_title", "pain_points")
-    return keyword_search(q, _KNOWLEDGE, max_lines=35)
+    """사내 추진계획서 표준·가이드 RAG 검색(Chroma/키워드)."""
+    ctx = context or {}
+    q = query.strip() or _ctx_get(
+        ctx, "proposal_title", "idea_title", "pain_points", "current_problems"
+    )
+    if not q:
+        q = "추진계획서 AS-IS TO-BE WBS ROI 리스크"
+    return retrieve_reference_context(q, k=4)
+
+
+def tool_extract_proposal_info(user_input: str = "", context: dict[str, Any] | None = None) -> str:
+    """S01 — 제목/주제에서 핵심 메타 JSON 추출."""
+    from autopm.tools.proposal_tools import extract_proposal_info
+
+    text = (user_input or "").strip() or _ctx_get(
+        context or {}, "proposal_title", "idea_title", "user_topic"
+    )
+    return extract_proposal_info(text)
+
+
+def tool_generate_interview_questions(extracted_info: str = "", context: dict[str, Any] | None = None) -> str:
+    """S02 — 인터뷰 보완 질문 5개 JSON."""
+    from autopm.tools.proposal_tools import extract_proposal_info, generate_interview_questions
+
+    info = (extracted_info or "").strip()
+    if not info:
+        info = extract_proposal_info(
+            _ctx_get(context or {}, "proposal_title", "idea_title", "user_topic")
+        )
+    return generate_interview_questions(info)
 
 
 def tool_estimate_cost(
@@ -73,6 +100,31 @@ def tool_normalize_input(text: str) -> str:
     return parse_paste_text(text)
 
 
+def tool_presenton_mcp_status() -> str:
+    """Presenton Docker MCP 연결 상태 — PPT Composer·수집 탭 참고용."""
+    try:
+        from autopm.mcp.presenton_client import (
+            check_presenton_mcp_health,
+            is_presenton_mcp_enabled,
+            presenton_mcp_url,
+        )
+        from autopm.services.presenton_export import check_presenton_health, is_presenton_configured
+
+        if not is_presenton_configured():
+            return "(MCP) Presenton 미설정 — .env에 PRESENTON_USERNAME/PASSWORD 또는 API KEY"
+        http_ok, http_msg = check_presenton_health()
+        if not is_presenton_mcp_enabled():
+            return f"(MCP) Presenton REST만 사용 (MCP 비활성). HTTP={http_ok} ({http_msg})"
+        mcp_ok, mcp_msg = check_presenton_mcp_health()
+        return (
+            f"Presenton MCP URL: {presenton_mcp_url()}\n"
+            f"HTTP UI: {http_ok} ({http_msg})\n"
+            f"MCP tools: {mcp_ok} ({mcp_msg})"
+        )
+    except Exception as exc:  # noqa: BLE001
+        return f"(MCP) presenton 상태 확인 실패: {exc}"
+
+
 def tool_read_slide_plan() -> str:
     """outputs/slide_plan.json 요약 — PPT Agent가 구조를 맞출 때 참고."""
     path = _OUTPUTS / "slide_plan.json"
@@ -89,7 +141,11 @@ def tool_read_slide_plan() -> str:
 
 # MCP 서버·in-process 공용 핸들러 맵
 TOOL_HANDLERS: dict[str, Any] = {
+    "presenton_mcp_status": tool_presenton_mcp_status,
     "rag_search": tool_rag_search,
+    "retrieve_reference_context": tool_rag_search,
+    "extract_proposal_info": tool_extract_proposal_info,
+    "generate_interview_questions": tool_generate_interview_questions,
     "estimate_cost": tool_estimate_cost,
     "fp_estimate": tool_fp_estimate,
     "mermaid_process": tool_mermaid_process,

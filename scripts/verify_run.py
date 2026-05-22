@@ -11,6 +11,7 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from autopm.evaluation.test_cases import GOLDEN_ERP_INPUTS
 from autopm.orchestration.flow import AutoPMFlow, _merge_inputs_bundle
+from autopm.agents.deep_agent_sdk import is_deep_agents_sdk_enabled
 from autopm.services.llm_router import get_llm_routing_status
 
 
@@ -21,6 +22,7 @@ def main() -> int:
 
     print("=== LLM routing ===")
     print(json.dumps(get_llm_routing_status(), ensure_ascii=False, indent=2))
+    print(f"=== Deep Agents SDK (create_deep_agent) enabled: {is_deep_agents_sdk_enabled()} ===")
 
     print("\n=== AutoPMFlow.run() ===")
     result = AutoPMFlow().run(inputs)

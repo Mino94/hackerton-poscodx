@@ -1,0 +1,29 @@
+# Presenton PPT 오픈소스 — AutoPM과 MCP/REST 연동용
+# 사용: docker compose -f docker-compose.presenton.yml up -d
+services:
+  presenton:
+    image: ghcr.io/presenton/presenton:latest
+    container_name: autopm-presenton
+    ports:
+      - "${PRESENTON_PORT:-5000}:80"
+    volumes:
+      - ./presenton_data:/app_data
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      # self-hosted 기본 인증 — .env의 AUTH_* 또는 PRESENTON_* 와 맞출 것
+      AUTH_USERNAME: ${PRESENTON_USERNAME:-admin}
+      AUTH_PASSWORD: ${PRESENTON_PASSWORD:-changeme123}
+      CAN_CHANGE_KEYS: "true"
+      # LLM: .env에 OPENAI_API_KEY 있으면 openai, 없으면 ollama(호스트)
+      LLM: ${PRESENTON_LLM:-openai}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
+      OLLAMA_URL: ${OLLAMA_URL:-http://host.docker.internal:11434}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5:7b}
+      DISABLE_ANONYMOUS_TRACKING: "true"
+      MIGRATE_DATABASE_ON_STARTUP: "true"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped

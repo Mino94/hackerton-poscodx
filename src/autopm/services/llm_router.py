@@ -192,11 +192,14 @@ def get_llm_routing_status() -> dict[str, Any]:
 
 
 def get_mcp_routing_status() -> dict[str, Any]:
-    """MCP 서버·도구 상태 — Streamlit 사이드바용."""
+    """MCP 서버·도구·RAG 상태 — Streamlit 사이드바용."""
     try:
         from autopm.mcp.client import get_mcp_status
+        from autopm.tools.proposal_rag import get_rag_status
 
-        return get_mcp_status()
+        out = get_mcp_status()
+        out["proposal_rag"] = get_rag_status()
+        return out
     except Exception as exc:  # noqa: BLE001
         return {"mcp_enabled": False, "error": str(exc)}
 

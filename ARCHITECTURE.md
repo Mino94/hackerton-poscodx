@@ -12,7 +12,14 @@
 | `cloud` | OpenAI | synthesizer 통합·최종 형식 정리 |
 | `auto` | OpenAI → Ollama → rule fallback | 기타 |
 
-실행 순서: Sub-Agent 순차 실행 → Parent가 `tasks.yaml` 기대 형식으로 통합(`subagent_runner.py`).  
+실행 순서 (**Deep Agents SDK**, `AUTOPM_USE_DEEP_AGENTS=true` 기본):
+
+1. `deep_agent_sdk.invoke_deep_agent()` — `from deepagents import create_deep_agent`
+2. `subagents.yaml` → `SubAgent` 스펙 → Parent가 `task` 도구로 Sub-Agent 위임
+3. `mcp_agent_tools.yaml` → LangChain Tool로 MCP in-process 호출
+4. LLM 없음·SDK 실패 시 `subagent_runner._legacy_run_subagents_then_task()` + `invoke_for_agent` 폴백
+
+진입: `deep_runner.run_agent_task_with_subagents()` → `run_task_via_deep_agent_or_fallback()`.  
 산출은 `AutoPMState.subagent_outputs` · `outputs/subagent_outputs.json`에 기록된다.
 
 환경 변수: `OPEN_SOURCE_LLM_PROVIDER=ollama`, `AUTOPM_USE_LOCAL_LLM=true`, `AUTOPM_ENABLE_SUBAGENTS=true`(기본).

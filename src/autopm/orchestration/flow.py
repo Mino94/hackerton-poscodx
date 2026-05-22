@@ -46,7 +46,8 @@ from autopm.services.observability import log, record_phase_ms
 from autopm.services.prompt_manager import load_tasks
 from autopm.tools.calculation_engine import estimate_rough_cost
 from autopm.tools.document_parser import sample_parse_for_demo
-from autopm.tools.rag_engine import keyword_search
+from autopm.tools.rag_engine import is_rag_quality_pipeline_enabled, retrieve_context
+from autopm.tools.proposal_tools import build_rag_snippet_from_context, run_proposal_quality_pipeline
 from autopm.tools.visualization_generator import markdown_gantt_placeholder
 from autopm.ppt.asset_manifest import VisualAssetsManifest
 from autopm.ppt.content_builder import build_business_plan
@@ -266,13 +267,29 @@ class AutoPMFlow:
     def _build_enriched(self, inputs: dict[str, str], ppt_gen: PPTGenerationState | None) -> dict[str, str]:
         """사용자 결정(PPTGenerationState)을 Task placeholder 문자열로 합성한다."""
         merged_inp = _coerce_crew_input_dict(inputs)
+        title_q = (
+            merged_inp.get("proposal_title")
+            or merged_inp.get("idea_title")
+            or merged_inp.get("user_topic")
+            or ""
+        )
+        rag_block = build_rag_snippet_from_context(merged_inp)
+        enriched_base: dict[str, str] = {
+            **merged_inp,
+            "rag_snippet": rag_block,
+            "reference_context": retrieve_context(title_q, _KNOWLEDGE, k=4)[:6000],
+        }
+        if is_rag_quality_pipeline_enabled():
+            try:
+                pipe = run_proposal_quality_pipeline(title_q or str(merged_inp))
+                for k, v in pipe.items():
+                    if v and k not in enriched_base:
+                        enriched_base[k] = v[:8000] if isinstance(v, str) else str(v)
+            except Exception:
+                pass
         return apply_decisions_to_enriched(
             {
-                **merged_inp,
-                "rag_snippet": keyword_search(
-                    inputs.get("proposal_title") or inputs.get("idea_title", ""),
-                    _KNOWLEDGE,
-                ),
+                **enriched_base,
                 "calc_hints": estimate_rough_cost(
                     inputs.get("monthly_hours", "0"),
                     inputs.get("headcount", "0"),
@@ -972,11 +989,62 @@ class AutoPMFlow:
                 state.artifacts["visual_assets.json"] = str((outp / "visual_assets.json").resolve())
         except Exception as exc:  # noqa: BLE001
             state.errors.append(f"visual_assets.json: {exc}")
+        ppt_cfg: dict[str, Any] = {}
         try:
-            pptx_path = create_project_plan_ppt(deck.model_dump(), str(outp / "project_plan.pptx"))
-            state.artifacts["project_plan.pptx"] = pptx_path
+            from autopm.services.ppt_quality_router import get_ppt_quality_config, try_export_presenton_ppt
+
+            ppt_cfg = get_ppt_quality_config()
         except Exception as exc:  # noqa: BLE001
-            state.errors.append(f"pptx: {exc}")
+            state.errors.append(f"ppt_quality_config: {exc}")
+
+        pptx_path: str | None = None
+        # Presenton — 최종 Composer JSON + SlideDeck → 고품질 PPTX (python-pptx 대체·우선)
+        if ppt_cfg.get("presenton_enabled"):
+            try:
+                from autopm.services.ppt_quality_router import try_export_presenton_ppt
+
+                presenton_paths = try_export_presenton_ppt(
+                    outp,
+                    project_title=title,
+                    markdown=markdown_before_slides,
+                    deck_dict=deck.model_dump(),
+                    context=inp_combined,
+                    composer_raw=state.ppt_composer_raw or "",
+                    business_plan=business_plan,
+                    on_progress=on_progress,
+                )
+                if presenton_paths:
+                    for k, v in presenton_paths.items():
+                        if v and isinstance(v, str):
+                            state.artifacts[k] = v
+                    pptx_path = presenton_paths.get("project_plan.pptx")
+            except Exception as exc:  # noqa: BLE001
+                state.errors.append(f"presenton_ppt: {exc}")
+
+        # python-pptx — Presenton 미사용·실패 시 폴백, both 모드 시 로컬 백업
+        need_local_pptx = not pptx_path or ppt_cfg.get("ppt_api_mode") == "both"
+        if need_local_pptx and ppt_cfg.get("python_pptx_fallback", True):
+            local_name = (
+                "project_plan_local.pptx"
+                if pptx_path and ppt_cfg.get("ppt_api_mode") == "both"
+                else "project_plan.pptx"
+            )
+            try:
+                local_path = create_project_plan_ppt(
+                    deck.model_dump(), str(outp / local_name)
+                )
+                if not pptx_path:
+                    pptx_path = local_path
+                state.artifacts[local_name] = local_path
+                if local_name == "project_plan.pptx":
+                    state.artifacts["project_plan.pptx"] = local_path
+            except Exception as exc:  # noqa: BLE001
+                state.errors.append(f"pptx: {exc}")
+        elif not pptx_path:
+            state.errors.append(
+                "pptx: Presenton 생성 실패 및 python-pptx 폴백 비활성화 — "
+                "AUTOPM_PPT_API=python-pptx 또는 Presenton Docker를 확인하세요."
+            )
 
         # Gamma API — 고품질 PPTX(선택). 실패해도 기본 project_plan.pptx 유지
         try:

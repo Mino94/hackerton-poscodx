@@ -1,4 +1,4 @@
-"""탭 3 — PPT·문서·Agent 산출물 뷰 (컴팩트 서브탭)."""
+"""산출물 탭 — 다운로드 허브·문서 미리보기·데이터·품질 (사용자 친화)."""
 
 from __future__ import annotations
 
@@ -6,261 +6,409 @@ import json
 from pathlib import Path
 from typing import Any
 
+import pandas as pd
 import streamlit as st
 
-from autopm.orchestration.state import agent_dialogue_entries_as_dicts
-from autopm.ui.markdown_utils import join_sections, outline_json, slide_count_from_json, split_numbered_sections
+from autopm.ui.markdown_utils import join_sections, slide_count_from_json, split_numbered_sections
 from autopm.ui.supervisor_panel import render_supervisor_panel
 
+# 산출물 파일 메타 — 아이콘·설명·MIME
+_FILE_CATALOG: list[tuple[str, str, str, str]] = [
+    ("project_plan.pptx", "📊", "추진계획서 PPT", "application/vnd.openxmlformats-officedocument.presentationml.presentation"),
+    ("project_plan_gamma.pptx", "✨", "Gamma 고품질 PPT", "application/vnd.openxmlformats-officedocument.presentationml.presentation"),
+    ("project_plan.md", "📄", "추진계획서 Markdown", "text/markdown"),
+    ("slide_plan.json", "🗂", "슬라이드 구성 JSON", "application/json"),
+    ("wbs.csv", "📅", "WBS 일정", "text/csv"),
+    ("budget.csv", "💰", "예산·ROI", "text/csv"),
+    ("risk_log.csv", "⚡", "리스크 로그", "text/csv"),
+    ("critic_review.md", "📝", "Critic 검토", "text/markdown"),
+    ("agent_dialogue.json", "💬", "Agent 대화 로그", "application/json"),
+]
 
-def _visual_asset_rows_from_file(path_str: str | None) -> list[dict]:
-    if not path_str:
-        return []
-    p = Path(path_str)
-    if not p.is_file():
-        return []
+
+def _inject_results_css() -> None:
+    st.markdown(
+        """
+        <style>
+        .results-hero {
+          background: linear-gradient(135deg, #f0f7ff 0%, #f8fafc 100%);
+          border: 1px solid #cbd5e1; border-radius: 10px;
+          padding: 1rem 1.1rem; margin-bottom: 0.75rem;
+        }
+        .results-hero h3 { margin: 0 0 0.35rem; color: #05509c; font-size: 1.05rem; }
+        .file-card {
+          border: 1px solid #e2e8f0; border-radius: 8px; padding: 0.65rem 0.75rem;
+          background: #fff; min-height: 5.5rem;
+        }
+        .file-card .fname { font-size: 0.78rem; color: #64748b; word-break: break-all; }
+        .status-pass { color: #166534; font-weight: 600; }
+        .status-fail { color: #b91c1c; font-weight: 600; }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _read_file_preview(path: Path, max_chars: int = 2000) -> str:
     try:
-        data = json.loads(p.read_text(encoding="utf-8"))
+        return path.read_text(encoding="utf-8", errors="replace")[:max_chars]
+    except OSError:
+        return ""
+
+
+def _csv_to_dataframe(path: Path) -> pd.DataFrame | None:
+    try:
+        return pd.read_csv(path, encoding="utf-8")
+    except Exception:
+        return None
+
+
+def _render_empty_state() -> None:
+    st.markdown("### 📁 산출물")
+    st.caption("생성이 완료되면 이 탭에서 **PPT 다운로드**와 문서·표를 한곳에서 확인할 수 있습니다.")
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        st.markdown("**1. 인터뷰**")
+        st.caption("💬 인터뷰·프로세스 탭에서 주제·질문 답변")
+    with c2:
+        st.markdown("**2. 생성**")
+        st.caption("Auto: PPT 자동 생성 · Guided: 📊 수집·진행에서 단계 승인")
+    with c3:
+        st.markdown("**3. 다운로드**")
+        st.caption("여기서 PPT·CSV·Markdown 받기")
+    st.info("아직 산출물이 없습니다. 위 순서대로 진행한 뒤 다시 열어 주세요.")
+
+
+def _render_hero(result: Any, artifacts: dict[str, str], n_slides: int | None) -> None:
+    """상단 요약 + 핵심 PPT 다운로드."""
+    score = result.state.critic_score
+    gate = result.state.pass_quality_gate
+    gate_cls = "status-pass" if gate else "status-fail"
+    gate_txt = "품질 통과" if gate else "품질 검토 필요"
+
+    title = (result.state.user_input.get("proposal_title") or result.state.user_input.get("idea_title") or "추진계획서")[:60]
+    st.markdown(
+        f'<div class="results-hero">'
+        f"<h3>{title}</h3>"
+        f'<p style="margin:0;font-size:0.85rem;color:#475569;">'
+        f"슬라이드 <b>{n_slides or '—'}</b>장 · "
+        f'Critic <b>{score if score is not None else "—"}</b> · '
+        f'<span class="{gate_cls}">{gate_txt}</span>'
+        f"</p></div>",
+        unsafe_allow_html=True,
+    )
+
+    ppt = artifacts.get("project_plan.pptx")
+    gamma = artifacts.get("project_plan_gamma.pptx")
+    gamma_url = artifacts.get("gamma_url", "")
+
+    d1, d2, d3 = st.columns([1, 1, 1])
+    with d1:
+        if ppt and Path(ppt).is_file():
+            with open(ppt, "rb") as f:
+                st.download_button(
+                    "📥 PPT 다운로드",
+                    f,
+                    "project_plan.pptx",
+                    mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                    type="primary",
+                    use_container_width=True,
+                )
+        else:
+            st.button("PPT 없음", disabled=True, use_container_width=True)
+    with d2:
+        if gamma and Path(gamma).is_file():
+            with open(gamma, "rb") as fg:
+                st.download_button(
+                    "✨ Gamma PPT",
+                    fg,
+                    "project_plan_gamma.pptx",
+                    mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                    use_container_width=True,
+                )
+        else:
+            st.caption("Gamma: API 키 설정 시 생성")
+    with d3:
+        md_path = artifacts.get("project_plan.md")
+        if md_path and Path(md_path).is_file():
+            with open(md_path, "rb") as fm:
+                st.download_button("📄 Markdown", fm, "project_plan.md", use_container_width=True)
+        if gamma_url:
+            st.link_button("Gamma 웹에서 열기", gamma_url, use_container_width=True)
+
+
+def _render_download_grid(artifacts: dict[str, str]) -> None:
+    """모든 파일 — 카드 + 개별 다운로드."""
+    st.markdown("##### 파일 목록")
+    cols = st.columns(3)
+    idx = 0
+    for fname, icon, label, mime in _FILE_CATALOG:
+        path_str = artifacts.get(fname)
+        if not path_str or not Path(path_str).is_file():
+            continue
+        p = Path(path_str)
+        with cols[idx % 3]:
+            st.markdown(
+                f'<div class="file-card">'
+                f"<div style='font-size:1.4rem'>{icon}</div>"
+                f"<b>{label}</b><br>"
+                f"<span class='fname'>{fname}</span></div>",
+                unsafe_allow_html=True,
+            )
+            with open(p, "rb") as f:
+                st.download_button(
+                    "다운로드",
+                    f,
+                    fname,
+                    mime=mime,
+                    key=f"dl_{fname}",
+                    use_container_width=True,
+                )
+        idx += 1
+    if idx == 0:
+        st.caption("다운로드 가능한 파일이 아직 없습니다.")
+
+
+def _render_document_view(result: Any, parts: dict[int, str]) -> None:
+    """추진계획서 본문 — 섹션별 expander."""
+    st.markdown("##### 문서 미리보기")
+
+    section_labels = {
+        0: "Executive Summary",
+        1: "추진 배경",
+        2: "현재 문제점",
+        3: "AS-IS",
+        4: "TO-BE",
+        5: "개발 범위",
+        7: "WBS",
+        8: "예산 및 ROI",
+        9: "KPI",
+        10: "리스크 매트릭스",
+        11: "Critic Review",
+        12: "PPT 슬라이드 구성",
+    }
+
+    # 요약·핵심만 기본 펼침
+    for num in [0, 1, 2, 3, 4, 5]:
+        body = parts.get(num, "").strip()
+        if not body:
+            continue
+        title = section_labels.get(num, f"섹션 {num}")
+        first_line = body.splitlines()[0].replace("##", "").strip() if body else title
+        with st.expander(first_line[:48] or title, expanded=(num <= 2)):
+            st.markdown(body)
+
+    with st.expander("WBS · 예산 · 리스크 · Critic (전체)", expanded=False):
+        for num in [7, 8, 9, 10, 11]:
+            body = parts.get(num, "").strip()
+            if body:
+                st.markdown(body)
+                st.divider()
+
+    if parts.get(12):
+        with st.expander("PPT 슬라이드 구성표", expanded=False):
+            st.markdown(parts[12])
+
+
+def _render_data_view(artifacts: dict[str, str], parts: dict[int, str]) -> None:
+    """WBS·예산·리스크 — CSV 표 우선."""
+    st.markdown("##### 표·일정 데이터")
+
+    wbs_p = artifacts.get("wbs.csv")
+    if wbs_p and Path(wbs_p).is_file():
+        st.markdown("**WBS / 추진 일정**")
+        df = _csv_to_dataframe(Path(wbs_p))
+        if df is not None and not df.empty:
+            st.dataframe(df, use_container_width=True, hide_index=True)
+            with open(wbs_p, "rb") as f:
+                st.download_button("WBS CSV", f, "wbs.csv", key="dl_wbs_inline")
+        else:
+            st.markdown(parts.get(7, "_없음_"))
+    elif parts.get(7):
+        st.markdown(parts.get(7))
+
+    st.divider()
+    budget_p = artifacts.get("budget.csv")
+    if budget_p and Path(budget_p).is_file():
+        st.markdown("**예산 및 ROI**")
+        df = _csv_to_dataframe(Path(budget_p))
+        if df is not None and not df.empty:
+            st.dataframe(df, use_container_width=True, hide_index=True)
+            with open(budget_p, "rb") as f:
+                st.download_button("예산 CSV", f, "budget.csv", key="dl_budget_inline")
+        else:
+            st.markdown(join_sections(parts, 8, 9) or "_없음_")
+    elif parts.get(8) or parts.get(9):
+        st.markdown(join_sections(parts, 8, 9))
+
+    st.divider()
+    risk_p = artifacts.get("risk_log.csv")
+    if risk_p and Path(risk_p).is_file():
+        st.markdown("**리스크**")
+        df = _csv_to_dataframe(Path(risk_p))
+        if df is not None and not df.empty:
+            st.dataframe(df, use_container_width=True, hide_index=True)
+            with open(risk_p, "rb") as f:
+                st.download_button("리스크 CSV", f, "risk_log.csv", key="dl_risk_inline")
+        else:
+            st.markdown(parts.get(10, "_없음_"))
+    elif parts.get(10):
+        st.markdown(parts.get(10))
+
+
+def _render_slide_outline(artifacts: dict[str, str], parts: dict[int, str]) -> None:
+    """슬라이드 구성 — 표 형태로 요약."""
+    slide_path = artifacts.get("slide_plan.json")
+    if not slide_path or not Path(slide_path).is_file():
+        if parts.get(12):
+            st.markdown(parts[12])
+        else:
+            st.caption("slide_plan.json 없음")
+        return
+
+    try:
+        data = json.loads(Path(slide_path).read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
-        return []
-    rows_va: list[dict] = []
-    for s in data.get("slides") or []:
+        st.warning("슬라이드 JSON을 읽을 수 없습니다.")
+        return
+
+    slides = data.get("slides") or []
+    rows = []
+    for s in slides:
         if not isinstance(s, dict):
             continue
-        for a in s.get("assets") or []:
-            if not isinstance(a, dict):
-                continue
-            rows_va.append(
-                {
-                    "slide_no": s.get("slide_no"),
-                    "title": s.get("title"),
-                    "visual_type": s.get("visual_type") or a.get("visual_type"),
-                    "render_mode": a.get("render_mode") or s.get("render_mode"),
-                    "asset_path": a.get("path") or "",
-                }
-            )
-    return rows_va
-
-
-def render_results_tab(result: Any | None, agent_steps: list[Any] | None) -> None:
-    """산출물이 없으면 안내, 있으면 요약 메트릭 + 서브탭."""
-    if not result:
-        st.info(
-            "**Auto**: 인터뷰 탭에서 주제 입력 후 **PPT 자동 생성**. "
-            "**Guided**: 인터뷰 탭 하단 패널에서 단계 승인 후 여기에 표시됩니다."
+        rows.append(
+            {
+                "No": s.get("slide_no", ""),
+                "제목": (s.get("title") or "")[:40],
+                "핵심 메시지": (s.get("key_message") or "")[:50],
+                "시각자료": s.get("visual_type") or "",
+            }
         )
-        return
+    if rows:
+        st.dataframe(rows, use_container_width=True, hide_index=True)
+        with st.expander("JSON 원본", expanded=False):
+            st.code(Path(slide_path).read_text(encoding="utf-8")[:8000], language="json")
+    else:
+        st.caption("슬라이드 항목 없음")
+
+
+def _render_quality_view(result: Any, artifacts: dict[str, str]) -> None:
+    """품질·Coverage·Harness."""
+    st.markdown("##### 품질 점검")
 
     c1, c2, c3, c4 = st.columns(4)
     with c1:
-        st.metric("Critic", result.state.critic_score if result.state.critic_score is not None else "—")
+        st.metric("Critic 점수", result.state.critic_score if result.state.critic_score is not None else "—")
     with c2:
         st.metric("품질 게이트", "PASS" if result.state.pass_quality_gate else "FAIL")
     with c3:
-        st.metric("루프", f"{result.state.loop_count}/{result.state.max_loops}")
+        st.metric("개선 루프", f"{result.state.loop_count}/{result.state.max_loops}")
     with c4:
-        ppt_path = result.state.artifacts.get("project_plan.pptx")
-        n = slide_count_from_json(result.state.artifacts.get("slide_plan.json"))
-        st.metric("PPT 슬라이드", n or "—")
-
-    st.caption(
-        f"Phase `{result.state.current_phase}` · "
-        f"Feedback `{result.state.feedback_target or '—'}` · "
-        f"개선 {len(result.state.improvement_applied)}건"
-    )
-
-    t_main, t_agents, t_files = st.tabs(["핵심 산출물", "Agent·대화", "Supervisor·로그"])
-
-    with t_main:
-        _render_file_subtabs(result)
-
-    with t_agents:
-        _render_agent_subtabs(result, agent_steps)
-
-    with t_files:
-        with st.expander("Supervisor PM", expanded=True):
-            render_supervisor_panel(getattr(result.state, "supervisor", None) or {})
-        with st.expander("Structured JSON / Logs", expanded=False):
-            st.json(result.structured)
-            if result.state.timings_ms:
-                st.caption("구간 소요(ms)")
-                st.json(result.state.timings_ms)
-            st.text_area("실행 로그", value="\n".join(result.state.logs[-40:]), height=140)
-
-
-def _render_file_subtabs(result: Any) -> None:
-    result_md = result.markdown
-    parts = split_numbered_sections(result_md)
-    artifacts = result.state.artifacts
-
-    ppt_path = artifacts.get("project_plan.pptx")
-    slide_json_path = artifacts.get("slide_plan.json")
-    business_plan_path = artifacts.get("business_plan.json")
-    content_coverage_path = artifacts.get("content_coverage_report.json")
-    visual_assets_path = artifacts.get("visual_assets.json")
-    n_slides = slide_count_from_json(slide_json_path)
-
-    t_ppt, t_doc, t_slide, t_data, t_eval = st.tabs(
-        ["PPT", "추진계획서", "Slide Plan", "WBS·예산·리스크", "품질·Coverage"]
-    )
-
-    with t_ppt:
-        gamma_path = artifacts.get("project_plan_gamma.pptx")
-        gamma_url = artifacts.get("gamma_url", "")
-        st.caption(
-            f"**기본 PPT** · {n_slides or '—'}장"
-            + (" · **Gamma API** 사용 가능" if gamma_path and Path(gamma_path).is_file() else "")
+        harness = result.structured.get("harness") or (
+            result.state.harness_report() if hasattr(result.state, "harness_report") else {}
         )
-        col_a, col_b = st.columns(2)
-        with col_a:
-            if ppt_path and Path(ppt_path).is_file():
-                with open(ppt_path, "rb") as fp:
-                    st.download_button(
-                        label="📥 기본 PPT (python-pptx)",
-                        data=fp,
-                        file_name="project_plan.pptx",
-                        mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
-                        use_container_width=True,
-                    )
-            else:
-                st.warning("`project_plan.pptx` 없음")
-        with col_b:
-            if gamma_path and Path(gamma_path).is_file():
-                with open(gamma_path, "rb") as fg:
-                    st.download_button(
-                        label="✨ Gamma PPT (고품질)",
-                        data=fg,
-                        file_name="project_plan_gamma.pptx",
-                        mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
-                        use_container_width=True,
-                    )
-                if gamma_url:
-                    st.caption(f"[Gamma에서 열기]({gamma_url})")
-            else:
-                st.caption("Gamma PPT: `.env`에 `GAMMA_API_KEY` 설정 시 생성")
+        st.metric("Harness", f"{harness.get('overall_score', '—')}/100" if harness else "—")
 
-    with t_doc:
-        if parts.get(0):
-            st.markdown(parts[0])
-        st.markdown(join_sections(parts, 1, 6) or "_본문 없음_")
+    cov_path = artifacts.get("content_coverage_report.json")
+    if cov_path and Path(cov_path).is_file():
+        try:
+            cov = json.loads(Path(cov_path).read_text(encoding="utf-8"))
+            st.markdown("**PPT 본문 채움**")
+            cc1, cc2, cc3 = st.columns(3)
+            cc1.metric("슬라이드", cov.get("total_slides", "—"))
+            cc2.metric("본문 있음", cov.get("slides_with_body", "—"))
+            cc3.metric("검증", "통과" if cov.get("passed") else "미통과")
+        except (OSError, json.JSONDecodeError):
+            pass
 
-    with t_slide:
-        if business_plan_path and Path(business_plan_path).is_file():
-            with st.expander("business_plan.json", expanded=False):
-                st.code(Path(business_plan_path).read_text(encoding="utf-8")[:8000], language="json")
-        if slide_json_path and Path(slide_json_path).is_file():
-            st.code(Path(slide_json_path).read_text(encoding="utf-8")[:12000], language="json")
-        else:
-            st.info("slide_plan.json 없음")
-        if parts.get(12):
-            st.markdown("---")
-            st.markdown(parts[12])
-
-    with t_data:
-        st.markdown(parts.get(7, "_WBS 없음_"))
-        st.divider()
-        st.markdown(join_sections(parts, 8, 9) or "_예산/KPI 없음_")
-        st.divider()
-        st.markdown(parts.get(10, "_리스크 없음_"))
-        st.divider()
-        st.markdown(parts.get(11, "_Critic 없음_"))
-
-    with t_eval:
-        _render_coverage(content_coverage_path)
-        st.divider()
-        _render_harness(result)
-        rows_v = _visual_asset_rows_from_file(visual_assets_path)
-        if rows_v:
-            st.markdown("**Visual Assets**")
-            st.dataframe(rows_v, hide_index=True, use_container_width=True)
-
-
-def _render_coverage(content_coverage_path: str | None) -> None:
-    if not content_coverage_path or not Path(content_coverage_path).is_file():
-        st.caption("content_coverage_report.json 없음")
-        return
-    try:
-        cov = json.loads(Path(content_coverage_path).read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        cov = {}
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("슬라이드", cov.get("total_slides", "—"))
-    c2.metric("본문 채움", cov.get("slides_with_body", "—"))
-    c3.metric("빈 content", cov.get("empty_content_slides", "—"))
-    c4.metric("검증", "✓" if cov.get("passed") else "✗")
-
-
-def _render_harness(result: Any) -> None:
-    harness = result.structured.get("harness") or result.state.harness_report()
-    if not harness:
-        st.caption("Evaluation harness 없음")
-        return
-    st.metric("Overall", f"{harness.get('overall_score', '—')} / 100")
+    harness = result.structured.get("harness") or {}
+    if not harness and hasattr(result.state, "harness_report"):
+        harness = result.state.harness_report() or {}
     scores = harness.get("agent_scores") or {}
     if scores:
+        st.markdown("**Agent별 점수**")
         st.dataframe(
-            [{"Agent": k, "Score": v} for k, v in sorted(scores.items())],
-            hide_index=True,
+            [{"Agent": k, "점수": v} for k, v in sorted(scores.items())],
             use_container_width=True,
+            hide_index=True,
         )
 
+    critic_path = artifacts.get("critic_review.md")
+    if critic_path and Path(critic_path).is_file():
+        with st.expander("Critic Review 전문", expanded=False):
+            st.markdown(_read_file_preview(Path(critic_path), 6000))
 
-def _render_agent_subtabs(result: Any, agent_steps: list[Any] | None) -> None:
+
+def _render_advanced(result: Any, agent_steps: list[Any] | None) -> None:
+    """기술 로그·Supervisor·태스크 원문."""
     if agent_steps:
-        st.dataframe(
-            [
-                {
-                    "Agent": ag.display_name,
-                    "상태": ag.status,
-                    "산출": (ag.artifact or "")[:80],
-                }
-                for ag in agent_steps
-            ],
-            hide_index=True,
-            use_container_width=True,
-        )
+        with st.expander("Agent 실행 요약", expanded=False):
+            st.dataframe(
+                [
+                    {
+                        "Agent": ag.display_name,
+                        "상태": {"pending": "대기", "running": "실행", "complete": "완료", "error": "오류"}.get(
+                            ag.status, ag.status
+                        ),
+                        "산출": (ag.artifact or "")[:60],
+                    }
+                    for ag in agent_steps
+                ],
+                hide_index=True,
+                use_container_width=True,
+            )
 
-    t_out, t_sub, t_dlg, t_raw = st.tabs(["결과물", "Sub-Agent", "대화", "Raw"])
     outputs_map = result.state.agent_outputs or {}
-    sub_map = getattr(result.state, "subagent_outputs", None) or {}
-
-    with t_out:
-        if not outputs_map:
-            st.caption("태스크별 Markdown·JSON이 여기 표시됩니다.")
-        for task_key, body in outputs_map.items():
-            n_sub = len(sub_map.get(task_key) or [])
-            label = f"`{task_key}`" + (f" · Sub {n_sub}" if n_sub else "")
-            with st.expander(label, expanded=False):
+    if outputs_map:
+        with st.expander("태스크별 Agent 원문", expanded=False):
+            for task_key, body in outputs_map.items():
+                st.caption(f"`{task_key}`")
                 lang = "json" if (body or "").strip().startswith("{") else "markdown"
-                st.code((body or "")[:10000], language=lang)
+                st.code((body or "")[:6000], language=lang)
 
-    with t_sub:
-        for task_key, recs in sub_map.items():
-            with st.expander(f"`{task_key}` ({len(recs)})", expanded=False):
-                for rec in recs:
-                    st.markdown(
-                        f"**{rec.get('subagent_id', '?')}** · "
-                        f"`{rec.get('llm_tier', '')}` · {rec.get('provider', '?')}"
-                    )
-                    st.code((rec.get("output") or "")[:5000], language="markdown")
+    with st.expander("Supervisor PM", expanded=False):
+        render_supervisor_panel(getattr(result.state, "supervisor", None) or {})
 
-    with t_dlg:
-        dialogue = agent_dialogue_entries_as_dicts(result.state)
-        for i, d in enumerate(dialogue, 1):
-            fr = d.get("from_role") or d.get("from_agent", "?")
-            to = d.get("to_role") or d.get("to_agent", "?")
-            rounds = d.get("rounds") or []
-            with st.expander(f"{i}. {fr} ↔ {to}" + (f" · {len(rounds)}R" if rounds else ""), expanded=i <= 2):
-                if rounds:
-                    for t in rounds:
-                        st.markdown(f"**R{t.get('round')} · {t.get('role', '?')}**")
-                        st.markdown(t.get("message", ""))
-                else:
-                    st.markdown(d.get("message", ""))
+    with st.expander("실행 로그·JSON", expanded=False):
+        if result.state.timings_ms:
+            st.caption("구간 소요 (ms)")
+            st.json(result.state.timings_ms)
+        st.text_area("로그", value="\n".join(result.state.logs[-30:]), height=120, disabled=True)
+        st.json(result.structured)
 
-    with t_raw:
-        st.code(result.markdown, language="markdown")
-        st.code(outline_json(result.markdown), language="json")
-        if result.state.artifacts:
-            for k, v in result.state.artifacts.items():
-                st.caption(f"**{k}**: `{v}`")
+
+def render_results_tab(result: Any | None, agent_steps: list[Any] | None) -> None:
+    """산출물 탭 — 다운로드 허브 중심."""
+    _inject_results_css()
+
+    if not result:
+        _render_empty_state()
+        return
+
+    artifacts = result.state.artifacts or {}
+    parts = split_numbered_sections(result.markdown or "")
+    n_slides = slide_count_from_json(artifacts.get("slide_plan.json"))
+
+    _render_hero(result, artifacts, n_slides)
+
+    view = st.radio(
+        "보기",
+        ["📥 다운로드", "📄 문서", "📊 데이터·표", "🗂 슬라이드", "✓ 품질", "⚙ 고급"],
+        horizontal=True,
+        label_visibility="collapsed",
+    )
+
+    if view.startswith("📥"):
+        _render_download_grid(artifacts)
+        st.caption("Agent 협업 대화는 **🤝 Agent 대화** 탭에서 채팅 형태로 확인할 수 있습니다.")
+    elif view.startswith("📄"):
+        _render_document_view(result, parts)
+    elif view.startswith("📊"):
+        _render_data_view(artifacts, parts)
+    elif view.startswith("🗂"):
+        _render_slide_outline(artifacts, parts)
+    elif view.startswith("✓"):
+        _render_quality_view(result, artifacts)
+    else:
+        _render_advanced(result, agent_steps)

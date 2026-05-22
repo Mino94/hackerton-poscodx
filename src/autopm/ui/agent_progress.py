@@ -112,8 +112,9 @@ def render_agent_progress(
     steps: list[AgentStep],
     *,
     progress_callback: Callable[[float], None] | None = None,
+    compact: bool = False,
 ) -> None:
-    """카드형 목록 + 선택적 progress(0.0~1.0) 콜백 — st.progress와 함께 쓰려면 콜백에서 갱신."""
+    """카드형 목록 + 선택적 progress(0.0~1.0) 콜백 — compact=True 시 Studio용 한 줄 요약."""
     total = len(steps)
     done = _count_complete(steps)
     running = sum(1 for s in steps if s.status == "running")
@@ -124,7 +125,18 @@ def render_agent_progress(
         progress_callback(min(1.0, frac))
     import streamlit as st
 
-    st.caption(f"완료 **{done}** / **{total}** · 실행 중 **{running}** · 오류 **{err}**")
+    st.caption(f"{done}/{total}" + (f" · ▶{running}" if running else "") + (f" · ✕{err}" if err else ""))
+
+    if compact:
+        for s in steps:
+            if s.status == "pending" and not s.artifact:
+                continue
+            short = s.display_name.replace(" Agent", "").replace(" / Slide Planning", "")
+            emoji = _status_emoji(s.status)
+            extra = f" · {s.artifact}" if s.artifact else ""
+            st.markdown(f"{emoji} `{short}`{extra}")
+        return
+
     for s in steps:
         with st.container(border=True):
             c1, c2 = st.columns([0.12, 0.88])

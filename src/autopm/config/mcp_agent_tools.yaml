@@ -8,11 +8,15 @@ pm_orchestrator_agent:
 
 requirement_interview_agent:
   - rag_search
+  - retrieve_reference_context
+  - extract_proposal_info
+  - generate_interview_questions
   - normalize_input
   - estimate_cost
 
 business_analyst_agent:
   - rag_search
+  - retrieve_reference_context
   - mermaid_process
 
 solution_architect_agent:
@@ -26,13 +30,16 @@ development_scope_agent:
 wbs_planner_agent:
   - gantt_outline
   - mermaid_process
+  - retrieve_reference_context
 
 budget_roi_agent:
   - estimate_cost
   - fp_estimate
+  - retrieve_reference_context
 
 risk_critic_agent:
   - rag_search
+  - retrieve_reference_context
 
 storyline_slide_planning_agent:
   - read_slide_plan
@@ -42,11 +49,13 @@ visualization_agent:
   - mermaid_process
   - read_slide_plan
 
-presentation_graphics_agent:
-  - read_slide_plan
-
 ppt_composer_agent:
   - read_slide_plan
+  - presenton_mcp_status
+
+presentation_graphics_agent:
+  - read_slide_plan
+  - presenton_mcp_status
 
 # tasks.yaml task_key 오버라이드(선택)
 task_overrides:

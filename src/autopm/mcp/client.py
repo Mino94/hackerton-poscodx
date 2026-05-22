@@ -32,11 +32,32 @@ def _pythonpath_entries() -> list[str]:
     return entries
 
 
+def _presenton_http_connection() -> dict[str, Any] | None:
+    try:
+        from autopm.mcp.presenton_client import (
+            _presenton_http_connection as _conn,
+            is_presenton_mcp_enabled,
+        )
+
+        if is_presenton_mcp_enabled():
+            return _conn()
+    except Exception:
+        return None
+    return None
+
+
 async def _load_mcp_tools_async() -> list[Any]:
     from langchain_mcp_adapters.client import MultiServerMCPClient
 
-    client = MultiServerMCPClient({"autopm": _stdio_connection()})
-    return await client.get_tools(server_name="autopm")
+    servers: dict[str, Any] = {"autopm": _stdio_connection()}
+    pres = _presenton_http_connection()
+    if pres:
+        servers["presenton"] = pres
+    client = MultiServerMCPClient(servers)
+    tools: list[Any] = []
+    for name in servers:
+        tools.extend(await client.get_tools(server_name=name))
+    return tools
 
 
 def get_mcp_langchain_tools() -> list[Any]:
@@ -59,12 +80,32 @@ def get_mcp_status() -> dict[str, Any]:
     tools = get_mcp_langchain_tools() if is_mcp_react_enabled() else []
     from autopm.mcp.registry import TOOL_HANDLERS
 
+    presenton_mcp: dict[str, Any] = {"enabled": False}
+    try:
+        from autopm.mcp.presenton_client import (
+            check_presenton_mcp_health,
+            is_presenton_mcp_enabled,
+            presenton_mcp_url,
+        )
+
+        if is_presenton_mcp_enabled():
+            ok, msg = check_presenton_mcp_health()
+            presenton_mcp = {
+                "enabled": True,
+                "url": presenton_mcp_url(),
+                "healthy": ok,
+                "detail": msg,
+            }
+    except Exception as exc:  # noqa: BLE001
+        presenton_mcp = {"enabled": False, "error": str(exc)[:120]}
+
     return {
         "mcp_enabled": is_mcp_enabled(),
         "mcp_react": is_mcp_react_enabled(),
         "inprocess_tools": list(TOOL_HANDLERS.keys()),
         "stdio_tools_loaded": len(tools),
         "stdio_server": "python -m autopm.mcp.server",
+        "presenton_mcp": presenton_mcp,
     }
 
 

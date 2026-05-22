@@ -115,7 +115,7 @@ def run_subagents_for_parent(
     return records, final
 
 
-def run_subagents_then_task(
+def _legacy_run_subagents_then_task(
     parent_agent_key: str,
     agent_defs: dict[str, Any],
     task_defs: dict[str, Any],
@@ -126,7 +126,8 @@ def run_subagents_then_task(
     on_progress: Callable[[str], None] | None = None,
 ) -> tuple[str, list[SubAgentRunRecord]]:
     """
-    Sub-Agent 체인 실행 후, tasks.yaml 기대 형식에 맞게 Parent가 한 번 더 다듬는다(cloud 우선).
+    레거시: Sub-Agent 순차 invoke_for_agent + Parent 통합.
+    Deep Agents SDK 불가 시 deep_agent_sdk가 호출한다.
     """
     all_defs = load_subagents()
     chain: list[dict[str, Any]] = list(all_defs.get(parent_agent_key) or [])
@@ -146,7 +147,7 @@ def run_subagents_then_task(
         )
 
     if on_progress:
-        on_progress(f"  ▸ Sub-Agent 팀 시작 ({parent_agent_key})")
+        on_progress(f"  ▸ Sub-Agent 팀 시작 (레거시) ({parent_agent_key})")
 
     records, sub_merged = run_subagents_for_parent(
         parent_agent_key,
@@ -191,8 +192,37 @@ def run_subagents_then_task(
     return final, records
 
 
+def run_subagents_then_task(
+    parent_agent_key: str,
+    agent_defs: dict[str, Any],
+    task_defs: dict[str, Any],
+    task_key: str,
+    context: dict[str, str],
+    *,
+    prior_dialogue: str = "",
+    on_progress: Callable[[str], None] | None = None,
+) -> tuple[str, list[SubAgentRunRecord]]:
+    """
+    Deep Agents SDK(`create_deep_agent` + `task` Sub-Agent) 우선.
+    """
+    from autopm.agents.deep_agent_sdk import run_task_via_deep_agent_or_fallback
+
+    text, _prov, records = run_task_via_deep_agent_or_fallback(
+        parent_agent_key,
+        agent_defs,
+        task_defs,
+        task_key,
+        context,
+        prior_dialogue=prior_dialogue,
+        on_progress=on_progress,
+        use_subagents=True,
+    )
+    return text, records
+
+
 __all__ = [
     "SubAgentRunRecord",
     "run_subagents_for_parent",
     "run_subagents_then_task",
+    "_legacy_run_subagents_then_task",
 ]

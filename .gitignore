@@ -27,6 +27,8 @@ Thumbs.db
 
 # Project outputs (regenerable)
 outputs/
+presenton_data/
+data/chroma_autopm/
 
 # Streamlit
 .streamlit/secrets.toml

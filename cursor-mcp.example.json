@@ -1,0 +1,17 @@
+{
+  "mcpServers": {
+    "autopm": {
+      "command": "python",
+      "args": ["-m", "autopm.mcp"],
+      "env": {
+        "PYTHONPATH": "src"
+      }
+    },
+    "presenton": {
+      "url": "http://127.0.0.1:5000/mcp",
+      "headers": {
+        "Authorization": "Basic <base64(username:password)>"
+      }
+    }
+  }
+}
